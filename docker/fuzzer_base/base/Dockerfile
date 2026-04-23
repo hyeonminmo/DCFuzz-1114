@@ -20,7 +20,7 @@ ENV SRC=/src
 ENV WORK=/work
 ENV PATH="$PATH:/out"
 RUN mkdir -p $OUT $SRC $WORK
-ENV CMAKE_VERSION 3.21.1
+ENV CMAKE_VERSION=3.21.1
 RUN wget https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-Linux-x86_64.sh && \
     chmod +x cmake-$CMAKE_VERSION-Linux-x86_64.sh && \
     ./cmake-$CMAKE_VERSION-Linux-x86_64.sh --skip-license --prefix="/usr/local" && \

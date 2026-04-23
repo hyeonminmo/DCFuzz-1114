@@ -19,6 +19,7 @@ cd ..
 
 build_lib
 
+# cd ..
 
 for binary in $RELEVANT_BINARIES; do
   cp BUILD/util/$binary ./$binary

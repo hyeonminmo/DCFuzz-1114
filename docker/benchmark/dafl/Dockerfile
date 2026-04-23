@@ -15,18 +15,19 @@ RUN echo "****************build smake********************"
 COPY dafl/build_smake.sh /benchmark/build_smake.sh
 RUN ./build_smake.sh
 
+RUN echo "****************setup sparrow********************"
 
+COPY dafl/setup_sparrow.sh /benchmark/setup_sparrow.sh
+RUN ./setup_sparrow.sh
 
-# RUN echo "****************setup sparrow********************"
+RUN echo "****************build dafl**************************"
 
-# COPY dafl/setup_sparrow.sh /benchmark/setup_sparrow.sh
-# RUN ./setup_sparrow.sh
-
-# RUN echo "****************build dafl**************************"
-
-# COPY dafl/script /benchmark/scripts
-# COPY dafl/build_bench_dafl.sh /benchmark/build_bench_dafl.sh
-# RUN ./build_bench_dafl.sh
+COPY dafl/script /benchmark/scripts
+COPY dafl/build_bench_dafl.sh /benchmark/build_bench_dafl.sh
+RUN ./build_bench_dafl.sh
+RUN rm /benchmark/build_smake.sh
+RUN rm /benchmark/setup_sparrow.sh
+RUN rm /benchmark/build_bench_dafl.sh
 
 
 

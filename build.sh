@@ -2,6 +2,7 @@
 SCRIPT_DIR=$(dirname $(realpath $0))
 BENCHMARK_PREFIX=dcfuzz_bench
 
+
 USER=dcfuzz
 
 # hard code UID and GID to bypass docker volumn permission issue
@@ -26,7 +27,7 @@ if [ -e $SCRIPT_DIR/Dockerfile ]; then
             --build-arg USER=$USER \
             --build-arg UID=$_UID \
             --build-arg GID=$GID \
-            -t dcfuzz3 \
+            -t dcfuzz_dominator \
             -f $SCRIPT_DIR/Dockerfile \
             "${build_args[@]}" \
             .

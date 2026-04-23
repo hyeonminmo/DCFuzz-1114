@@ -15,7 +15,6 @@ RUN echo "****************build smake********************"
 COPY dafl/build_smake.sh /benchmark/build_smake.sh
 RUN ./build_smake.sh
 
-
 RUN echo "****************setup sparrow********************"
 
 COPY dafl/setup_sparrow.sh /benchmark/setup_sparrow.sh

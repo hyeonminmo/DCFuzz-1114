@@ -27,7 +27,7 @@ yes | /smake/smake --init
 /smake/smake -j 1
 cp -r sparrow/util/swftophp /benchmark/smake-out/swftophp-4.8 || exit 1
 
-### Program: libming-4.8
+### Program: libming-4.8.1
 cd /benchmark
 build_target libming-4.8.1 clang clang++ " "
 cd /benchmark/RUNDIR-libming-4.8.1/BUILD

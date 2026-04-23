@@ -108,10 +108,12 @@ def main():
         exit(1)
     benchmark = sys.argv[1]
     worklist = generate_slicing_worklist(benchmark)
+    print(f"main 001 - worklist : {worklist}")
 
     os.makedirs(SPARROW_OUT_DIR, exist_ok=True)
     while len(worklist) > 0:
         works = fetch_works(worklist)
+        print(f"main 002 - works : {works}")
         run_sparrow(works)
     shutil.rmtree(SPARROW_OUT_DIR, ignore_errors=True)
 

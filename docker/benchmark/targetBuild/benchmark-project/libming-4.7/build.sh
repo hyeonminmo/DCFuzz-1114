@@ -19,16 +19,17 @@ cd ..
 
 build_lib
 
-echo "BUILD/util Directory :"
+# cd ..
+# echo "BUILD/util Directory :"
 
-echo $(ls BUILD/util)
+# echo $(ls BUILD/util)
 
-echo "CC : $CC"
-echo "CXX : $CXX"
-echo "LLVM_COMPILER : $LLVM_COMPILER"
-echo "CFLAGS: $CFLAGS"
+# echo "CC : $CC"
+# echo "CXX : $CXX"
+# echo "LLVM_COMPILER : $LLVM_COMPILER"
+# echo "CFLAGS: $CFLAGS"
 
-echo "**********************************************************************************"
+# echo "**********************************************************************************"
 
 #sleep 3600
 

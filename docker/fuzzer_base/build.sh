@@ -3,12 +3,20 @@ SCRIPT_DIR=$(dirname $(realpath $0))
 export IMAGE_PREFIX=fuzzer_base3
 
 fuzzer_list=(
-    base
-    aflgo
-    windranger
-    dafl
-    score
-    distance
+    #base
+    #aflgo
+    #aflgo_dup
+    #windranger
+    #windranger_dup
+    #dafl_dup
+    #score
+    #selectfuzz
+    #selectfuzz_prob
+    #aflgo_dup_test
+    #windranger_dup_test
+    #dafl_dup_test
+    #selectfuzz_prob_test
+    dominator
 )
 
 USER=$(id -un)

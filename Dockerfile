@@ -1,12 +1,21 @@
-FROM fuzzer_base2/aflgo as aflgo
-FROM fuzzer_base/windranger as windranger
-FROM fuzzer_base/dafl as dafl
+#FROM fuzzer_base3/aflgo AS aflgo
+FROM fuzzer_base3/aflgo_dup_test AS aflgo
+#FROM fuzzer_base3/windranger AS windranger
+FROM fuzzer_base3/windranger_dup_test AS windranger
+#FROM fuzzer_base3/dafl2 AS dafl
+FROM fuzzer_base3/dafl_dup_test AS dafl
+FROM fuzzer_base3/dominator AS dominator
+FROM fuzzer_base3/score AS score
 
-FROM dcfuzz_bench2/aflgo as bench_aflgo
-FROM dcfuzz_bench/windranger as bench_windranger
-FROM dcfuzz_bench/dafl as bench_dafl
-FROM dcfuzz_bench/asan as bench_asan
-FROM dcfuzz_bench/patch as bench_patch
+FROM dcfuzz_bench/aflgo AS bench_aflgo
+FROM dcfuzz_bench2/windranger AS bench_windranger
+FROM dcfuzz_bench2/dafl AS bench_dafl
+FROM dcfuzz_bench/dominator AS bench_dominator
+FROM dcfuzz_bench/asan AS bench_asan
+FROM dcfuzz_bench/native AS bench_native
+
+
+#FROM dcfuzz_bench/patch AS bench_patch
 
 FROM ubuntu:20.04
 
@@ -15,7 +24,6 @@ ARG UID
 ARG GID
 
 SHELL ["/bin/bash", "-c"]
-
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONIOENCODING=utf8 \
@@ -27,7 +35,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    build-essential cmake git curl wget unzip \
+    build-essential cmake git curl wget unzip tree  \
     autoconf automake libtool bison flex \
     zlib1g-dev libssl-dev python3 python3-pip \
     clang-format clang-tidy \
@@ -41,14 +49,14 @@ RUN apt-get update && \
     apt-get install -yy \
     git build-essential bc \
     golang binutils-gold \
-    libncurses5 \
+    libncurses5 libpng16-16 \
     libfreetype6 libfreetype6-dev \
     python-dev \
     nasm \
     libbz2-dev liblzo2-dev
 
 
-
+RUN apt update && apt install -y protobuf-compiler cgroup-tools lcov
 
 
 ### Copy fuzzer and builded program docker image 
@@ -59,22 +67,30 @@ RUN apt-get update && \
 COPY --chown=$UID:$GID --from=aflgo /fuzzer /fuzzer
 COPY --chown=$UID:$GID --from=windranger /fuzzer /fuzzer
 COPY --chown=$UID:$GID --from=dafl /fuzzer /fuzzer
+COPY --chown=$UID:$GID --from=score /fuzzer /fuzzer
+COPY --chown=$UID:$GID --from=dominator /fuzzer /fuzzer
+
 
 ## Copy program with each fuzzer image 
 
 #COPY --chown=$UID:$GID --from=bench_aflgo /benchmark/bin /benchmark/bin
 COPY --chown=$UID:$GID --from=bench_asan /benchmark/bin /benchmark/bin
-COPY --chown=$UID:$GID --from=bench_patch /benchmark/bin /benchmark/bin
+COPY --chown=$UID:$GID --from=bench_native /benchmark/bin /benchmark/bin
+COPY --chown=$UID:$GID --from=bench_native /benchmark/patches /benchmark/patches
+
 COPY --chown=$UID:$GID --from=bench_windranger /benchmark/bin /benchmark/bin
-COPY --chown=$UID:$GID --from=bench_dafl /benchmark /benchmark
-COPY --chown=$UID:$GID --from=bench_dafl /sparrow /sparrow
-COPY --chown=$UID:$GID --from=bench_dafl /smake /smake
-
-
+COPY --chown=$UID:$GID --from=bench_dominator /benchmark/bin /benchmark/bin
+#COPY --chown=$UID:$GID --from=bench_patch /benchmark/bin /benchmark/bin
+#COPY --chown=$UID:$GID --from=bench_dafl /benchmark /benchmark
+#COPY --chown=$UID:$GID --from=bench_dafl /sparrow /sparrow
+#COPY --chown=$UID:$GID --from=bench_dafl /smake /smake
 
 
 # Copy 
 COPY --chown=$UID:$GID --from=bench_aflgo /benchmark /benchmark
+COPY --chown=$UID:$GID --from=bench_dafl /benchmark /benchmark
+COPY --chown=$UID:$GID --from=bench_dafl /benchmark /benchmark
+
 #COPY --chown=$UID:$GID --from=bench_aflgo /benchmark/poc /benchmark/
 #COPY --chown=$UID:$GID --from=bench_aflgo /benchmark/seed /benchmark/seed
 #COPY --chown=$UID:$GID --from=bench_aflgo /benchmark/target /benchmark/target
@@ -97,7 +113,7 @@ RUN wget https://www.python.org/ftp/python/3.9.4/Python-3.9.4.tgz \
     && make -j8 install
 
 RUN curl https://bootstrap.pypa.io/get-pip.py -o /get-pip.py && python3 /get-pip.py
-
+RUN rm /Python-3.9.4.tgz
 
 # set timezone
 ENV TZ=America/New_York
@@ -124,6 +140,3 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 USER $USER
 
 WORKDIR /home/$USER
-
-
-

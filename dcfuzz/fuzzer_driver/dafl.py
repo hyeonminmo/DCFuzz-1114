@@ -2,16 +2,17 @@ import os
 import pathlib
 import sys
 import time
+import logging
 
 import peewee
 import psutil
 
 from dcfuzz import config as Config
-
 from .controller import Controller
-from .db import ControllerModel, db_proxy
-from .fuzzer import FuzzerDriverException, PSFuzzer
+from .db import DAFLModel, ControllerModel, db_proxy
+from .fuzzer import PSFuzzer, FuzzerDriverException
 
+# logger = logging.getLogger('dcfuzz.fuzzer_driver.dafl')
 
 CONFIG = Config.CONFIG
 FUZZER_CONFIG = CONFIG['fuzzer']
@@ -108,7 +109,8 @@ class DAFLBase(PSFuzzer):
         args += ['-m', 'none']
         args += ['-d']
         args += ['--', self.target]
-        args += self.argument.split(' ')
+        if not self.argument == '':
+            args += self.argument.split(' ')
         return args
 
 
@@ -127,20 +129,21 @@ class DAFL(DAFLBase):
         args += ['-m', 'none']
         args += ['-d']
         args += ['--', self.target]
-        args += self.argument.split(' ')
+        if not self.argument == '':
+            args += self.argument.split(' ')
+        # logger.info(f'dafl class 100 - arg : {args}')
         return args
 
 class DAFLController(Controller):
-    def __init__(self, seed, output, group, program, argument, thread=1, cgroup_path=''):
+    def __init__(self, seed, output, group, program, argument, cgroup_path=''):
         self.db = peewee.SqliteDatabase(
-                os.path.join(Config.DATABASE_DIR, 'dcfuzz-dafl.db'))
+            os.path.join(Config.DATABASE_DIR, 'dcfuzz-dafl.db'))
         self.name = 'dafl'
         self.seed = seed
         self.output = output
         self.group = group
         self.program = program
         self.argument = argument
-        self.thread = thread
         self.cgroup_path = cgroup_path
         self.dafls = []
         self.kwargs = {
@@ -149,25 +152,32 @@ class DAFLController(Controller):
             'group': self.group,
             'program': self.program,
             'argument': self.argument,
-            'thread': self.thread,
             'cgroup_path' : self.cgroup_path
         }
 
     def init(self):
+        # logger.info(f'dafl controller 001 - init dafl driver')
         db_proxy.initialize(self.db)
         self.db.connect()
         self.db.create_tables([DAFLModel, ControllerModel])
+        # check select model
+        q = DAFLModel.select()
+        # logger.info("DAFLModel count = %d", q.count())
+        # logger.info("DB path = %s", self.db.database)
+        # logger.info("DAFLModel db bound = %r", DAFLModel._meta.database)
         
-        for fuzzer in DAFLModel.selct():
-            dafl = DAFL(seed=fuzzer.seed, output=fuzzer.output, group=fuzzer.group, program=fuzzer.program, argument=fuzzer.argument, thread=fuzzer.thread, cgroup_path=self.cgroup_path, pid=fuzzer.pid)
+        for fuzzer in DAFLModel.select():
+            dafl = DAFL(seed=fuzzer.seed, output=fuzzer.output, group=fuzzer.group, program=fuzzer.program, argument=fuzzer.argument, cgroup_path=self.cgroup_path, pid=fuzzer.pid)
+            # logger.info(f'dafl controller 002 - dafl : {dafl}')
             self.dafls.append(dafl)
 
 
     def start(self):
+        # logger.info(f'dafl controller 003 - start dafl driver')
         if self.dafls:
             print('already started', file=sys.stderr)
             return
-        dafl = DAFL(**self.kwargs)
+        dafl = DAFL(**self.kwargs) 
         dafl.start()
         DAFLModel.create(**self.kwargs, pid=dafl.pid)
         ControllerModel.create(scale_num=1)
@@ -178,10 +188,12 @@ class DAFLController(Controller):
         pass
 
     def pause(self):
+        # logger.info(f'dafl controller 004 - pause dafl driver')
         for dafl in self.dafls:
             dafl.pause()
 
     def resume(self):
+        # logger.info(f'dafl controller 005 - resume dafl driver')
         '''
         NOTE: prserve scaling
         '''
@@ -190,6 +202,7 @@ class DAFLController(Controller):
             dafl.resume()
 
     def stop(self):
+        # logger.info(f'dafl controller 006 - stop dafl driver')
         for dafl in self.dafls:
             dafl.stop()
         self.db.drop_tables([DAFLModel, ControllerModel])

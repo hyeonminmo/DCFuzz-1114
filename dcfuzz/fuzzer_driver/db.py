@@ -13,7 +13,6 @@ class AFLGoModel(BaseModel):
     group = peewee.CharField()
     program = peewee.CharField()
     argument = peewee.CharField()
-    thread = peewee.IntegerField()
     pid = peewee.IntegerField()
 
 class WindRangerModel(BaseModel):
@@ -22,7 +21,6 @@ class WindRangerModel(BaseModel):
     group = peewee.CharField()
     program = peewee.CharField()
     argument = peewee.CharField()
-    thread = peewee.IntegerField()
     pid = peewee.IntegerField()
 
 class DAFLModel(BaseModel):
@@ -31,7 +29,6 @@ class DAFLModel(BaseModel):
     group = peewee.CharField()
     program = peewee.CharField()
     argument = peewee.CharField()
-    thread = peewee.IntegerField()
     pid = peewee.IntegerField()
 
 class ControllerModel(BaseModel):

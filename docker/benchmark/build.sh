@@ -1,25 +1,19 @@
 #!/bin/bash -e
 SCRIPT_DIR=$(dirname $(realpath $0))
-IMAGE_PREFIX=dcfuzz_bench
+IMAGE_PREFIX=dcfuzz_benchtest2
 FUZZER_PREFIX=fuzzer_base3
 
 fuzzer_list=(
-    #asan
-    aflgo
-    #windranger
-    #dafl
-    #patch
-    #coverage
-    #score    
-    # mopt
-    # qsym
-    #angora
-    # fairfuzz
-    #libfuzzer
-    #radamsa
-    #redqueen
-    # learnafl
-    #lafintel
+    # asan
+    # aflgo
+    # windranger
+    # dafl
+    # patch
+    # coverage
+    # score    
+    # native
+    dominator
+    # selectfuzz
 )
 
 pushd .

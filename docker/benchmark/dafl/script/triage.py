@@ -100,6 +100,41 @@ def check_cxxfilt_2016_6131(buf):
             return True
     return False
 
+def check_nm_2017_14940(buf):
+    if "Exit value is 137" in buf:
+        starts = buf.count('@@@ start')
+        ends = buf.count('@@@ end')
+        if starts > 0 and starts > ends :
+            return True
+    return False
+
+def check_objdump_2017_8392(buf):
+    if "heap-buffer-overflow" in buf:
+        if "read_4_bytes" in buf:
+            return True
+    return False
+
+
+def check_objdump_2017_8396(buf):
+    if "heap-buffer-overflow" in buf:
+        if get_crash_func(buf) == "bfd_getl64":
+            return True
+    return False
+
+
+def check_objdump_2017_8397(buf):
+    if "heap-buffer-overflow" in buf:
+        if get_crash_func(buf) == "bfd_perform_relocation":
+            return True
+    return False
+
+
+def check_objdump_2017_8398(buf):
+    if "heap-buffer-overflow" in buf:
+        if "process_extended_line_op" in buf:
+            return True
+    return False
+
 
 def check_swftophp_2016_9827(buf):
     if "heap-buffer-overflow" in buf:
@@ -161,4 +196,105 @@ def check_swftophp_2017_11729(buf):
         if "decompile.c:868" in buf:
             if get_crash_func_caller(buf) == "decompileINCR_DECR":
                 return True
+    return False
+
+def check_swftophp_2018_7868(buf):
+    # We should exclude SEGV because it's issue-122 (NULL dereference). Also,
+    # exclude UAF because it's likely CVE-2018-8962.
+    if "heap-buffer-overflow" in buf:
+        if check_all(buf, ["getString", "sprintf"]):
+            # If these are observed, it's likely CVE-2018-7873 or CVE-2018-7867.
+            return False
+        elif "decompile.c:398" in buf:
+            return True
+        elif "decompile.c:408" in buf:
+            # This is CVE-2018-7871.
+            return False
+        elif "getName" in buf:
+            warn("Unexpected heap BOF within getName", buf)
+    return False
+
+
+def check_swftophp_2018_8807(buf):
+    if "heap-use-after-free" in buf:
+        # Consider the crash at "decompile.c:398" as the same CVE (referred to
+        # the various stack traces in CVE-2018-8962).
+        if check_any(buf, ["decompile.c:349", "decompile.c:398"]):
+            if get_crash_func_caller(buf, 2) == "decompileCALLFUNCTION":
+                return True
+        # Crash also occurs at the caller itself. Conservatively say no.
+    return False
+
+
+def check_swftophp_2018_8962(buf):
+    possible_callers = ["decompileGETVARIABLE",
+                        "decompileSingleArgBuiltInFunctionCall",
+                        "decompilePUSHPARAM",
+                        "decompileDELETE",
+                        "decompileSETTARGET",
+                        "decompileSUBSTRING",
+                        "decompileNEWOBJECT"]
+    if "heap-use-after-free" in buf:
+        if check_any(buf, ["decompile.c:349", "decompile.c:398"]):
+            if get_crash_func_caller(buf) in possible_callers:
+                return True
+        # Crash also occurs at the caller itself. Conservatively say no.
+    return False
+
+
+def check_swftophp_2018_11095(buf):
+    # Accept both SEGV and BOF (cf. GitHub report and our PoC replay)
+    if check_any(buf, ["heap-buffer-overflow", "SEGV"]):
+        if "decompile.c:1843:" in buf:
+            return True
+        elif get_crash_func(buf) == "decompileJUMP":
+            warn("Unexpected crash point in decompileJUMP", buf)
+    return False
+
+def check_swftophp_2018_11225(buf):
+    if "heap-buffer-overflow" in buf:
+        if "decompile.c:2015:" in buf:
+            return True
+        elif get_crash_func(buf) == "decompile_SWITCH":
+            warn("Unexpected crash point in decompile_SWITCH", buf)
+    return False
+
+def check_swftophp_2018_11226(buf):
+    if "heap-buffer-overflow" in buf:
+        if "decompile.c:2015:" in buf:
+            return True
+        elif get_crash_func(buf) == "decompile_SWITCH":
+            warn("Unexpected crash point in decompile_SWITCH", buf)
+    return False
+
+def check_swftophp_2020_6628(buf):
+    if "heap-buffer-overflow" in buf:
+        if "decompile.c:2015:" in buf:
+            return True
+        elif get_crash_func(buf) == "decompile_SWITCH":
+            warn("Unexpected crash point in decompile_SWITCH", buf)
+    return False
+
+def check_swftophp_2018_20427(buf):
+    if "SEGV" in buf:
+        if "decompile.c:425:" in buf:
+            return True
+    return False
+
+
+def check_swftophp_2019_12982(buf):
+    if "heap-buffer-overflow" in buf:
+        if "decompile.c:3120:" in buf:
+            return True
+    return False
+
+
+def check_swftophp_2019_9114(buf):
+    if "heap-buffer-overflow" in buf:
+        # Possible crash points in strcpyext (all corresponds to this CVE).
+        if re.search(r"decompile.c:2(54|56|59|61):", buf) is not None:
+            if get_crash_func_caller(buf) == "getName":
+                return True
+            else:
+                warn("Unexpected caller of strcpyext", buf)
     return False

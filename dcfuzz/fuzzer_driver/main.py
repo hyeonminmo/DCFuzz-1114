@@ -5,17 +5,11 @@ import sys
 import logging
 
 # sys.path.append(os.path.dirname(os.path.realpath(__file__)))
-from .aflgo import AFLGoController
+from .aflgo import AFLGOController
 from .dafl import DAFLController
-#from .qsym import QSYMController
+from .windranger import WINDRANGERController
 
-logger = logging.getLogger('rcfuzz.fuzzer_driver.main')
-
-CONTROLLER_MAP = {
-    "aflgo": "AFLGoController",
-    "dafl": "DAFLController",
-    "windranger": "WindRangerController",
-}
+logger = logging.getLogger('dcfuzz.fuzzer_driver.main')
 
 
 def str_to_class(classname):
@@ -39,7 +33,7 @@ def parse_args(raw_args=None):
                    "--group",
                    type=str,
                    help="group",
-                   choices=['unibench', 'lava', 'fuzzer-test-suite'],
+                   choices=['binutils','swftophp'],
                    required=True)
     p.add_argument("-p", "--program", type=str, help="program", required=True)
     p.add_argument("--args", type=str, help="program argument", required=True)
@@ -65,30 +59,24 @@ def main(fuzzer,
          cgroup_path='',
          scale_num=1):
 
-    controller_class_name = CONTROLLER_MAP.get(fuzzer, None)
+    controller_class = str_to_class(f'{str.upper(fuzzer)}Controller')
 
-    logger.info(f'fuzzer_driver 001 - controller_class_name : {controller_class_name}')
-
-    controller_class = str_to_class(controller_class_name)
     if controller_class is None:
         print(f"{fuzzer} controller doesn't exist.")
+
+    #logger.info(f'fuzzer_driver 001 - controller_class : {controller_class}')
 
     controller = controller_class(seed=os.path.realpath(seed),
                                   output=os.path.realpath(output),
                                   group=group,
                                   program=program,
                                   argument=argument,
-                                  thread=thread,
                                   cgroup_path=cgroup_path)
 
-    logger.info(f'fuzzer_driver 002 - controller : {controller}')
-
     controller.init()
-
-
-
-
     command = command
+    
+    #logger.info(f'fuzzer_driver 002 - command : {command}')
 
     if command == 'start':
         controller.start()

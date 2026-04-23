@@ -2,11 +2,13 @@ import os
 import subprocess
 import sys
 from abc import ABCMeta, abstractmethod
+import logging
 
 import psutil
 
 from dcfuzz.common import IS_DEBUG
 
+logger = logging.getLogger('dcfuzz.fuzzer_driver.fuzzer')
 
 class FuzzerDriverException(Exception):
     pass
@@ -52,14 +54,14 @@ class PSFuzzer(Fuzzer):
         method to retrive process based on psutils
         '''
         proc = None
+        
         if not self.pid:
-            # print('self.pid not exist')
             return None
         if psutil.pid_exists(self.pid):
             proc = psutil.Process(pid=self.pid)
         else:
-            # print(f'psutil pid not exist {self.pid}')
             return None
+        #logger.info(f'fuzzer_driver fuzzer 001 - pid : {self.pid}, pid_exists={psutil.pid_exists(self.pid)}')
         return proc
 
     @abstractmethod
@@ -83,6 +85,9 @@ class PSFuzzer(Fuzzer):
         args = self.gen_run_args()
         cwd = self.gen_cwd()
         env = {**os.environ, **self.gen_env()}
+
+        # log_path = os.path.join(self.output, "fuzzer_std.log")
+        # log_file = open(log_path, "w")
         if IS_DEBUG:
             # print(env)
             print(" ".join(args))
@@ -102,12 +107,15 @@ class PSFuzzer(Fuzzer):
                                     stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL)
-
+        #                            bufsize =0)
+        # 여기서 subprocess.Popen() 하면서 pid 생성이 됨.   
         assert proc
         self.__proc = proc
         self.__pid = proc.pid
+        # logger.info(f'fuzzer_driver fuzzer 666 - proc : {proc}, pid : {proc.pid}, args : {args}, cwd : {cwd}')
 
     def start(self):
+        logger.info(f'fuzzer_driver fuzzer 002 start')
         if self.proc:
             # NOTE: alreay start
             print('already started', file=sys.stderr)
@@ -115,6 +123,7 @@ class PSFuzzer(Fuzzer):
         self.run()
 
     def pause(self):
+        logger.info(f'fuzzer_driver fuzzer 003 pause')
         if not self.proc:
             raise FuzzerDriverException
         for child in self.proc.children(recursive=True):
@@ -125,6 +134,7 @@ class PSFuzzer(Fuzzer):
         self.proc.suspend()
 
     def resume(self):
+        logger.info(f'fuzzer_driver fuzzer 004 resume')
         if not self.proc:
             raise FuzzerDriverException
         for child in self.proc.children(recursive=True):
@@ -135,6 +145,7 @@ class PSFuzzer(Fuzzer):
         self.proc.resume()
 
     def stop(self):
+        logger.info(f'fuzzer_driver fuzzer 005 stop')
         if not self.proc:
             # NOTE: no need to raise exception, maybe fuzzer just timeout
             return

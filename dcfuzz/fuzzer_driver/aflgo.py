@@ -2,17 +2,17 @@ import os
 import pathlib
 import sys
 import time
+import logging
 
 import peewee
 import psutil
 
-
 from dcfuzz import config as Config
-
 from .controller import Controller
-from .db import ControllerModel, db_proxy
-from .fuzzer import FuzzerDriverException, PSFuzzer
+from .db import AFLGoModel, ControllerModel, db_proxy
+from .fuzzer import PSFuzzer, FuzzerDriverException
 
+logger = logging.getLogger('dcfuzz.fuzzer_driver.aflgo')
 
 CONFIG = Config.CONFIG
 FUZZER_CONFIG = CONFIG['fuzzer']
@@ -77,7 +77,6 @@ class AFLGoBase(PSFuzzer):
         target_root = FUZZER_CONFIG['aflgo']['target_root']
         return os.path.join(target_root, self.program)
     
-    
     def gen_cwd(self):
         return os.path.dirname(self.target)
 
@@ -98,21 +97,21 @@ class AFLGoBase(PSFuzzer):
         ret &= os.path.exists(self.target)
         if not ret:
             raise FuzzerDriverException
-
+    
     def gen_run_args(self):
         self.check()
-
         args = []
         if self.cgroup_path:
             args += ['cgexec', '-g', f'cpu:{self.cgroup_path}']
-
         args += [self.aflgo_command, '-i', self.seed, '-o', self.output]
         args += ['-m', 'none']
         args += ['-d']
         args += ['-z', 'exp']
         args += ['-c', '20h']
         args += ['--', self.target]
-        args += self.argument.split(' ')
+        if not self.argument == '':
+            args += self.argument.split(' ')
+        logger.info(f'aflgo class 100 - arg : {args}')
         return args
 
 
@@ -134,11 +133,13 @@ class AFLGo(AFLGoBase):
         args += ['-z', 'exp']
         args += ['-c', '20h']
         args += ['--', self.target]
-        args += self.argument.split(' ')
+        if not self.argument == '':
+            args += self.argument.split(' ')
+        logger.info(f'aflgo class 100 - arg : {args}')
         return args
 
-class AFLGoController(Controller):
-    def __init__(self, seed, output, group, program, argument, thread=1, cgroup_path=''):
+class AFLGOController(Controller):
+    def __init__(self, seed, output, group, program, argument, cgroup_path=''):
         self.db = peewee.SqliteDatabase(
                 os.path.join(Config.DATABASE_DIR, 'dcfuzz-aflgo.db'))
         self.name = 'aflgo'
@@ -147,7 +148,6 @@ class AFLGoController(Controller):
         self.group = group
         self.program = program
         self.argument = argument
-        self.thread = thread
         self.cgroup_path = cgroup_path
         self.aflgos = []
         self.kwargs = {
@@ -156,21 +156,28 @@ class AFLGoController(Controller):
                 'group': self.group,
                 'program': self.program,
                 'argument': self.argument,
-                'thread': self.thread,
                 'cgroup_path' : self.cgroup_path
         }
 
     def init(self):
+        # logger.info(f'aflgo controller 001 - init aflgo driver')
         db_proxy.initialize(self.db)
         self.db.connect()
         self.db.create_tables([AFLGoModel, ControllerModel])
+        # check select model        
+        q = AFLGoModel.select()
+        # logger.info("AFLGoModel count = %d", q.count())
+        # logger.info("DB path = %s", self.db.database)
+        # logger.info("AFLGoModel db bound = %r", AFLGoModel._meta.database)
         
-        for fuzzer in AFLGoModel.selct():
-            aflgo = AFLGo(seed=fuzzer.seed, output=fuzzer.output, group=fuzzer.group, program=fuzzer.program, argument=fuzzer.argument, thread=fuzzer.thread, cgroup_path=self.cgroup_path, pid=fuzzer.pid)
+        for fuzzer in AFLGoModel.select():
+            aflgo = AFLGo(seed=fuzzer.seed, output=fuzzer.output, group=fuzzer.group, program=fuzzer.program, argument=fuzzer.argument, cgroup_path=self.cgroup_path, pid=fuzzer.pid)
+            # logger.info(f'aflgo controller 002 - aflgo : {aflgo}')
             self.aflgos.append(aflgo)
 
 
     def start(self):
+        # logger.info(f'aflgo controller 003 - start aflgo driver')
         if self.aflgos:
             print('already started', file=sys.stderr)
             return
@@ -185,10 +192,12 @@ class AFLGoController(Controller):
         pass
 
     def pause(self):
+        # logger.info(f'aflgo controller 004 - pause aflgo driver')
         for aflgo in self.aflgos:
             aflgo.pause()
 
     def resume(self):
+        # logger.info(f'aflgo controller 005 - resume aflgo driver')
         '''
         NOTE: prserve scaling
         '''
@@ -197,6 +206,7 @@ class AFLGoController(Controller):
             aflgo.resume()
 
     def stop(self):
+        # logger.info(f'aflgo controller 006 - stop aflgo driver')
         for aflgo in self.aflgos:
             aflgo.stop()
         self.db.drop_tables([AFLGoModel, ControllerModel])

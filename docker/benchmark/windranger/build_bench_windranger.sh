@@ -25,7 +25,6 @@ function build_with_WindRanger() {
         get-bc $BIN_NAME || exit 1
 	    #get-bc $BIN_NAME
 
-
         for BUG_NAME in "${str_array[@]:1}"; do
             /fuzzer/WindRanger/instrument/bin/cbi --targets=/benchmark/target/line/$BIN_NAME/$BUG_NAME ./$BIN_NAME.bc
             ### ASAN disabled
@@ -49,18 +48,21 @@ export PATH=/root/go/bin:$PATH
 # Build with Beacon
 mkdir -p /benchmark/bin/WindRanger
 build_with_WindRanger "libming-4.7" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-lm -lz" \
-    "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729" &
+    "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729" 
 build_with_WindRanger "libming-4.8" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-lm -lz" \
-    "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982" &
+    "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982" 
 build_with_WindRanger "libming-4.8.1" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-lm -lz" \
-    "swftophp-4.8.1 2019-9114" &
+    "swftophp 2019-9114" 
+
+wait
+
 build_with_WindRanger "binutils-2.26" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-ldl" \
     "cxxfilt 2016-4487 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131 \
-             2016-4489-crash 2016-4489-caller 2016-4492-crash1 2016-4492-crash2" &
+             2016-4489-crash 2016-4489-caller 2016-4492-crash1 2016-4492-crash2" 
 build_with_WindRanger "binutils-2.28" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-ldl" \
-    "objdump 2017-8392 2017-8396 2017-8397 2017-8398" &
+    "objdump 2017-8392 2017-8396 2017-8397 2017-8398" 
 build_with_WindRanger "binutils-2.29" "/fuzzer/WindRanger/fuzz/afl-clang-fast" "-ldl -fsanitize=address" \
-    "nm 2017-14940" &
+    "nm 2017-14940" 
 
 
 wait

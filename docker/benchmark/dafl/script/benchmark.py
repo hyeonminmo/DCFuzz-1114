@@ -21,6 +21,22 @@ FUZZ_TARGETS = [
     ("cxxfilt-2016-6131", "", "stdin", {
         "asan": check_cxxfilt_2016_6131
     }),
+    ("nm-2017-8397", "-A -a -l -S -s --special-syms --synthetic --with-symbol-versions -D @@", "file", {
+        "asan": check_nm_2017_14940
+    }),
+    ("objdump-2017-8392", "-SD @@", "file", {
+        "asan": check_objdump_2017_8392
+    }),
+    ("objdump-2017-8396", "-W @@", "file", {
+        "asan": check_objdump_2017_8396
+    }),
+    ("objdump-2017-8397", "-W @@", "file", {
+        "asan": check_objdump_2017_8397
+    }),
+    ("objdump-2017-8398", "-W @@", "file", {
+        "asan": check_objdump_2017_8398
+    }),
+
 
     ## Fuzz targets with alternate target point(s)
     ("cxxfilt-2016-4489-crash", "", "stdin", {
@@ -56,36 +72,74 @@ FUZZ_TARGETS = [
     ("swftophp-2017-11729", "@@", "file", {
         "asan": check_swftophp_2017_11729
     }),
+    ("swftophp-2018-7868", "@@", "file", {
+        "asan": check_swftophp_2018_7868
+    }),
+    ("swftophp-2018-8807", "@@", "file", {
+        "asan": check_swftophp_2018_8807
+    }),
+    ("swftophp-2018-8962", "@@", "file", {
+        "asan": check_swftophp_2018_8962
+    }),
+    ("swftophp-2018-11095", "@@", "file", {
+        "asan": check_swftophp_2018_11095
+    }),
+    ("swftophp-2018-11225", "@@", "file", {
+        "asan": check_swftophp_2018_11225
+    }),
+    ("swftophp-2018-11226", "@@", "file", {
+        "asan": check_swftophp_2018_11226
+    }),
+    ("swftophp-2018-20427", "@@", "file", {
+        "asan": check_swftophp_2018_20427
+    }),
+    ("swftophp-2019-12982", "@@", "file", {
+        "asan": check_swftophp_2019_12982
+    }),
+    ("swftophp-2019-9114", "@@", "file", {
+        "asan": check_swftophp_2019_9114
+    }),
+    ("swftophp-2020-6628", "@@", "file", {
+        "asan": check_swftophp_2020_6628
+    }),
+
 ]
 
 SLICE_TARGETS = {
     'swftophp': {
-        'frontend':
-        'cil',
-        'entry_point':
-        'main',
+        'frontend':'cil',
+        'entry_point':'main',
         'bugs': [
-            '2016-9827', '2016-9829', '2016-9831', '2017-9988', '2017-11728',
-            '2017-11729'
+            '2016-9827', '2016-9829', '2016-9831', '2017-9988', '2017-11728', '2017-11729'
         ]
     },
+     'swftophp-4.8': {
+        'frontend':'cil',
+        'entry_point':'main',
+        'bugs': ['2018-7868', '2018-8807', '2018-8962', '2018-11095', '2018-11225','2018-11226', '2018-20427', '2019-12982', '2020-6628']
+    },
+    'swftophp-4.8.1': {
+        'frontend':'cil',
+        'entry_point':'main',
+        'bugs': ['2019-9114']
+    },
     'cxxfilt': {
-        'frontend':
-        'cil',
-        'entry_point':
-        'main',
+        'frontend': 'cil',
+        'entry_point':'main',
         'bugs': [
-            '2016-4487',
-            '2016-4489',
-            '2016-4490',
-            '2016-4491',
-            '2016-4492',
-            '2016-6131',
-            '2016-4489-crash',
-            '2016-4489-caller',
-            '2016-4492-crash1',
-            '2016-4492-crash2',
+            '2016-4487', '2016-4489', '2016-4490', '2016-4491', '2016-4492', '2016-6131',
+            '2016-4489-crash', '2016-4489-caller', '2016-4492-crash1', '2016-4492-crash2'
         ]
+    },
+    'nm': {
+        'frontend':'cil',
+        'entry_point':'main',
+        'bugs': ['2017-14940']
+    },
+    'objdump': {
+        'frontend':'cil',
+        'entry_point':'main',
+        'bugs': ['2017-8392', '2017-8396', '2017-8397', '2017-8398']
     },
 }
 

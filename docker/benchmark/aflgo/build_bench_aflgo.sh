@@ -57,17 +57,18 @@ function build_with_AFLGo() {
 # Build with AFLGo
 mkdir -p /benchmark/bin/AFLGo
 build_with_AFLGo "libming-4.7" \
-    "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729" 
+    "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729"
 build_with_AFLGo "libming-4.8" \
-    "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982" 
+    "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982"
 build_with_AFLGo "libming-4.8.1" \
-    "swftophp 2019-9114" 
+    "swftophp 2019-9114"
+ 
 wait
 
 build_with_AFLGo "binutils-2.26" \
-    "cxxfilt 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131 2016-4492-crash2"
+    "cxxfilt 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131 2016-4492-crash2" &
 build_with_AFLGo "binutils-2.28" \
-    "objdump 2017-8392 2017-8396 2017-8397 2017-8398"
+    "objdump 2017-8392 2017-8396 2017-8397 2017-8398" &
 build_with_AFLGo "binutils-2.29" "nm 2017-14940"
 
 wait
