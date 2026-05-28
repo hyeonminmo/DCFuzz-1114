@@ -19,21 +19,6 @@ cd ..
 
 build_lib
 
-# cd ..
-# echo "BUILD/util Directory :"
-
-# echo $(ls BUILD/util)
-
-# echo "CC : $CC"
-# echo "CXX : $CXX"
-# echo "LLVM_COMPILER : $LLVM_COMPILER"
-# echo "CFLAGS: $CFLAGS"
-
-# echo "**********************************************************************************"
-
-#sleep 3600
-
-
 for binary in $RELEVANT_BINARIES; do
   cp BUILD/util/$binary ./$binary
 done
