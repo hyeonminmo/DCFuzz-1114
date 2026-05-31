@@ -1,179 +1,198 @@
 #!/bin/bash
-. $(dirname $0)/build_bench_common.sh
+set -euo pipefail
+
+. $(dirname "$0")/build_bench_common.sh
+
+PASS_SO="/fuzzer/Dominator/libDominatorCoveragePass.so"
+RUNTIME_SRC="/fuzzer/Dominator/dominator_runtime.c"
+
+function count_dominators() {
+    local map="$1"
+
+    awk -F'\t' '
+        NF >= 3 {
+            id = $1 + 0
+            if (!seen || id > max) max = id
+            seen = 1
+        }
+        END {
+            if (seen) print max + 1
+            else print 0
+        }
+    ' "$map"
+}
+
+function make_lto_wrapper() {
+    local out="$1"
+    local real="$2"
+    local pass_so="$3"
+    local dom_map="$4"
+    local runtime_obj="$5"
+
+    cat > "$out" <<EOF
+#!/bin/bash
+set -e
+
+REAL="$real"
+PASS_SO="$pass_so"
+DOM_MAP="$dom_map"
+RUNTIME_OBJ="$runtime_obj"
+
+compile_only=0
+has_lto=0
+is_configure_test=0
+info_query=0
+no_codegen=0
+
+for a in "\$@"; do
+    case "\$a" in
+        -c|-S)
+            compile_only=1
+            ;;
+        -E|-M|-MM)
+            no_codegen=1
+            ;;
+        -flto|-flto=*)
+            has_lto=1
+            ;;
+        *conftest*)
+            is_configure_test=1
+            ;;
+        --version|-v|-V|-qversion|-dumpmachine|-dumpversion|-print-*)
+            info_query=1
+            ;;
+    esac
+done
+
+# configure test, version query, preprocessing/dependency generation에는 pass를 붙이지 않음
+if [ "\$is_configure_test" -eq 1 ] || [ "\$info_query" -eq 1 ] || [ "\$no_codegen" -eq 1 ]; then
+    exec "\$REAL" "\$@"
+fi
+
+# 실제 소스 컴파일 단계에서 pass 로드
+# -dominator-map은 LLVM pass 옵션이므로 -mllvm으로 전달
+if [ "\$compile_only" -eq 1 ] && [ "\$has_lto" -eq 1 ]; then
+    exec "\$REAL" "\$@" \\
+        -Xclang -load -Xclang "\$PASS_SO" \\
+        -mllvm "-dominator-map=\$DOM_MAP"
+fi
+
+# 일반 compile-only는 그대로 수행
+if [ "\$compile_only" -eq 1 ]; then
+    exec "\$REAL" "\$@"
+fi
+
+# link 단계에서는 pass를 로드하지 말고 runtime만 링크
+exec "\$REAL" "\$@" "\$RUNTIME_OBJ"
+EOF
+
+    chmod +x "$out"
+}
 
 # arg1 : Target project
 # arg2~: Fuzzing targets
 function build_with_Dominator() {
-    for TARG in "${@:2}"; do
-        str_array=($TARG)
-        BIN_NAME=${str_array[0]}
+    local PROJECT="$1"
+    shift
+
+    for TARG in "$@"; do
+        local str_array=($TARG)
+        local BIN_NAME=${str_array[0]}
 
         cd /benchmark
-        
-        # 1st build: AFLGo instrumentation build for BBnames/BBcalls/bitcode extraction
-        CC="/fuzzer/AFLGo/afl-clang-fast"
-        CXX="/fuzzer/AFLGo/afl-clang-fast++"
 
-        # 2nd build: plain clang build for dominator-only custom LLVM pass
-        # CC_DOM="clang"
-        # CXX_DOM="clang++"
-
-        TMP_DIR=/benchmark/temp_$1
+        TMP_DIR=/benchmark/temp_$PROJECT
 
         for BUG_NAME in "${str_array[@]:1}"; do
-            ### Draw CFG and CG with BBtargets
-	        #TMP_DIR=/benchmark/temp_$1-$BUG_NAME
+            echo "[dominator-build] ==================================================" >&2
+            echo "[dominator-build] project=$PROJECT bin=$BIN_NAME bug=$BUG_NAME" >&2
+            echo "[dominator-build] ==================================================" >&2
 
-            mkdir -p $TMP_DIR
-            
-            cp /benchmark/target/line/$BIN_NAME/$BUG_NAME $TMP_DIR/BBtargets.txt
+            local INFO_DIR="/info/dominator/temp_${BIN_NAME}-${BUG_NAME}"
+            local DOM_MAP="$INFO_DIR/dominator_map.tsv"
 
-            ADDITIONAL="-g -targets=$TMP_DIR/BBtargets.txt \
-                        -outdir=$TMP_DIR -flto -fuse-ld=gold \
-                        -Wl,-plugin-opt=save-temps"
-                                    
-            build_target $1 $CC $CXX "$ADDITIONAL"
+            mkdir -p "$TMP_DIR"
 
-            cp "$TMP_DIR/BBnames.txt" "$TMP_DIR/BBnames.raw.txt"
+            ###################################################################
+            # 1. dominator_map.tsv의 ID 개수 계산
+            ###################################################################
+            local DOM_NUM
+            DOM_NUM="$(count_dominators "$DOM_MAP")"
 
-            cat "$TMP_DIR/BBnames.txt" | rev | cut -d: -f2- | rev | sort | uniq > "$TMP_DIR/BBnames2.txt" \
-            && mv "$TMP_DIR/BBnames2.txt" "$TMP_DIR/BBnames.txt"
-
-            cp "$TMP_DIR/BBcalls.txt" "$TMP_DIR/BBcalls.raw.txt"
-            cat $TMP_DIR/BBcalls.txt | sort | uniq > $TMP_DIR/BBcalls2.txt \
-            && mv $TMP_DIR/BBcalls2.txt $TMP_DIR/BBcalls.txt
-
-            ### find LLVM bitcode
-            # find /benchmark/RUNDIR-$1 -name "*.bc" | sort > "$TMP_DIR/bc.list"
-
-            ### find whole-program bc 
-            BCFILE=""
-            if find /benchmark/RUNDIR-$1 -name "*${BIN_NAME}*precodegen.bc" | grep -q .; then
-                BCFILE="$(find /benchmark/RUNDIR-$1 -name "*${BIN_NAME}*precodegen.bc" | head -n 1)"
-            elif find /benchmark/RUNDIR-$1 -name "*precodegen.bc" | grep -q .; then
-                BCFILE="$(find /benchmark/RUNDIR-$1 -name "*precodegen.bc" -printf '%s %p\n' \
-                    | sort -nr | head -n 1 | cut -d' ' -f2-)"
+            if [ "$DOM_NUM" -le 0 ]; then
+                echo "[dominator-build] ERROR: empty dominator map: $DOM_MAP" >&2
+                exit 1
             fi
-            echo "$BCFILE" > "$TMP_DIR/bcfile.txt"
 
-            ### IR dump
-            llvm-dis-12 "$BCFILE" -o "$TMP_DIR/module.ll" || true
+            ###################################################################
+            # 2. dominator_runtime.c 컴파일
+            ###################################################################
+            RUNTIME_OBJ="$TMP_DIR/dominator_runtime.o"
 
-            ### dominator tree dump
-            opt-12 -enable-new-pm=0 -analyze -domtree "$BCFILE" > "$TMP_DIR/domtree.txt" 2>&1 || \
-            opt-12 -passes='print<domtree>' -disable-output "$BCFILE" > "$TMP_DIR/domtree.txt" 2>&1
+            clang-12 -O2 -c \
+                -DDOMINATOR_NUM="$DOM_NUM" \
+                "$RUNTIME_SRC" \
+                -o "$RUNTIME_OBJ"
 
-            # ### extract dominator nodes for the target site(file:line)
-            # TARGET_LINE="$(head -n 1 "$TMP_DIR/BBtargets.txt")"
-            # TARGET_FUNC="$(head -n 1 "$TMP_DIR/Ftargets.txt")"
+            ###################################################################
+            # 3. LTO link 단계에서 DominatorCoveragePass를 로드하는 wrapper 생성
+            ###################################################################
+            local CC_DOM="$TMP_DIR/dom-clang"
+            local CXX_DOM="$TMP_DIR/dom-clang++"
 
-            # # python3 $DOM_SCRIPT_DIR/extract_dominator.py \
-            # #     "$TMP_DIR/module.ll" \
-            # #     "$TMP_DIR/domtree.txt" \
-            # #     "$TARGET_LINE" \
-            # #     --function "$TARGET_FUNC" \
-            # #     --strict \
-            # #     > "$TMP_DIR/dominator_nodes.txt" 2>&1
-            # python3 $DOM_SCRIPT_DIR/extract_dominator.py \
-            #     "$TMP_DIR/module.ll" \
-            #     "$TMP_DIR/domtree.txt" \
-            #     "$TARGET_LINE" \
-            #     --function "$TARGET_FUNC" \
-            #     > "$TMP_DIR/dominator_nodes.txt" 2>&1
+            local REAL_CC="$(command -v clang-12)"
+            local REAL_CXX="$(command -v clang++-12)"
 
-            # ### Build with dominator nodes, with dominator coverage, with dominator counts
+            make_lto_wrapper "$CC_DOM" "$REAL_CC" "$PASS_SO" "$DOM_MAP" "$RUNTIME_OBJ"
+            make_lto_wrapper "$CXX_DOM" "$REAL_CXX" "$PASS_SO" "$DOM_MAP" "$RUNTIME_OBJ"
 
-            # # make dominator manifest (ID <-> function,bb)
-            # python3 $DOM_SCRIPT_DIR/make_dominator.py \
-            #     "$TMP_DIR/dominator_nodes.txt" \
-            #     "$TMP_DIR/dominator_manifest.tsv"
+            ###################################################################
+            # 4. dominator_map.tsv 기반 대상 프로그램 재빌드
+            ###################################################################
+            rm -rf /benchmark/RUNDIR-$PROJECT
+
+            ADDITIONAL_DOM="-g -flto -fuse-ld=gold \
+                            -Wl,-plugin-opt=save-temps"
+
+            build_target "$PROJECT" "$CC_DOM" "$CXX_DOM" "$ADDITIONAL_DOM" \
+                > "$TMP_DIR/build_dominator.log" 2>&1 || {
+                    echo "[dominator-build] ERROR: build_target failed" >&2
+                    cat "$TMP_DIR/build_dominator.log" >&2 || true
+                    exit 1
+                }
+
+            ###################################################################
+            # 5. DCFuzz에서 실행할 계측 binary 복사
+            ###################################################################
+            copy_build_result "$PROJECT" "$BIN_NAME" "$BUG_NAME" "Dominator"
+
+            ###################################################################
+            # 6. 빌드 결과 저장
+            ###################################################################
+            cp "$TMP_DIR/build_dominator.log" "$INFO_DIR/build_dominator.log"
+            cp "$RUNTIME_OBJ" "$INFO_DIR/dominator_runtime.o"
             
-            # DOM_N=$(wc -l < "$TMP_DIR/dominator_manifest.tsv")
+            rm -rf /info/dominator/run_$BIN_NAME-$BUG_NAME
+            mv /benchmark/RUNDIR-$PROJECT /info/dominator/run_$BIN_NAME-$BUG_NAME
 
-            # clang -O2 -DDOMINATOR_NUM=$DOM_N \
-            #     -c /fuzzer/Dominator/dominator_runtime.c \
-            #     -o $TMP_DIR/dominator_runtime.o
-
-            # ar rcs $TMP_DIR/libdominator_rt.a $TMP_DIR/dominator_runtime.o
-
-            
-            # # optional: human-readable BB id map
-            # awk -F'\t' '{print "ID=" $1 ",FUNC=" $2 ",BB=" $3}' \
-            #     "$TMP_DIR/dominator_manifest.tsv" \
-            #     > "$TMP_DIR/dominator_id_map.txt"
-
-            # # instrument the SAME BCFILE used for dominator extraction
-            # opt-12 -enable-new-pm=0 \
-            #     -load /fuzzer/Dominator/libDominatorCoveragePass.so \
-            #     -dominator-cov \
-            #     -dominator-map="$TMP_DIR/dominator_manifest.tsv" \
-            #     "$BCFILE" \
-            #     -o "$TMP_DIR/instrumented.bc" 2> "$TMP_DIR/opt.instrument.log"
-
-            # # # verify instrumentation
-            # llvm-dis-12 "$TMP_DIR/instrumented.bc" -o "$TMP_DIR/instrumented.ll" || true
-
-            # # final link: replace with the original executable link line
-            # # swftophp target program
-            # clang -fuse-ld=gold \
-            #     "$TMP_DIR/instrumented.bc" \
-            #     "$TMP_DIR/libdominator_rt.a" \
-            #     -lpng -lm -lz \
-            #     -o "/benchmark/bin/Dominator/${BIN_NAME}-${BUG_NAME}"
-            # # # nm target program
-            # # clang -fuse-ld=gold \
-            # #     "$TMP_DIR/instrumented.bc" \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/binutils/bucomm.o /benchmark/RUNDIR-$1/binutils-2.26/binutils/version.o /benchmark/RUNDIR-$1/binutils-2.26/binutils/filemode.o \
-            # #     "$TMP_DIR/libdominator_rt.a" \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/bfd/.libs/libbfd.a \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/libiberty/libiberty.a \
-            # #     -ldl -lz \
-            # #     -o "/benchmark/bin/Dominator/${BIN_NAME}-${BUG_NAME}"
-
-            # # clang -fuse-ld=gold \
-            # #     "$TMP_DIR/instrumented.bc" \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/binutils/bucomm.o /benchmark/RUNDIR-$1/binutils-2.26/binutils/version.o /benchmark/RUNDIR-$1/binutils-2.26/binutils/filemode.o \
-            # #     "$TMP_DIR/libdominator_rt.a" \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/bfd/.libs/libbfd.a \
-            # #     -L /benchmark/RUNDIR-$1/binutils-2.26/zlib \
-            # #     -lz \
-            # #     /benchmark/RUNDIR-$1/binutils-2.26/libiberty/libiberty.a \
-            # #     -ldl \
-            # #     -o "/benchmark/bin/Dominator/${BIN_NAME}-${BUG_NAME}"
-
-            ### save build outputs
-            mv /benchmark/RUNDIR-$1 /info/dominator/run_$BIN_NAME-$BUG_NAME
-            mv $TMP_DIR /info/dominator/temp_$BIN_NAME-$BUG_NAME
-
-            ### Cleanup
-            rm -rf $TMP_DIR
-            rm -rf /benchmark/RUNDIR-$1
-
+            rm -rf "$TMP_DIR"
+            rm -rf /benchmark/RUNDIR-$PROJECT
         done
     done
 }
 
-export DOM_PASS_SO="/fuzzer/Dominator/libDominatorCoveragePass.so"
-# export DOM_SCRIPT_DIR="/fuzzer/Dominator/script"
-export DOM_SCRIPT_DIR="/benchmark/script"
-
-
-# Build with native only
 mkdir -p /benchmark/bin/Dominator
-build_with_Dominator "libming-4.7" \
-    "swftophp 2016-9827 2016-9829 2017-11728" 
+
 # build_with_Dominator "libming-4.7" \
-#     "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729" 
+#     "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729"
 # build_with_Dominator "libming-4.8" \
-#     "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982" 
+#     "swftophp 2018-7868 2018-8807 2018-8962 2018-11225 2018-11226 2020-6628 2018-20427 2019-12982"
 # build_with_Dominator "libming-4.8.1" \
-#     "swftophp 2019-9114" 
-# wait
-
-# build_with_Dominator "binutils-2.26" \
-#     "cxxfilt 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131" 
+#     "swftophp 2019-9114"
+build_with_Dominator "binutils-2.26" \
+    "cxxfilt 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131"
 # build_with_Dominator "binutils-2.28" \
-#     "objdump 2017-8392 2017-8396 2017-8397 2017-8398" 
-# build_with_Dominator "binutils-2.29" "nm 2017-14940" 
-
+#    "objdump 2017-8392 2017-8396 2017-8397 2017-8398"
+# build_with_Dominator "binutils-2.29" \
+#     "nm 2017-14940"
 wait
