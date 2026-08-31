@@ -1,6 +1,6 @@
 #!/bin/bash -e
 SCRIPT_DIR=$(dirname $(realpath $0))
-IMAGE_PREFIX=dcfuzz_benchtest2
+IMAGE_PREFIX=dcfuzz_bench2
 FUZZER_PREFIX=fuzzer_base3
 
 fuzzer_list=(
@@ -11,8 +11,8 @@ fuzzer_list=(
     # patch
     # coverage
     # score    
-    # native
-    dominator
+    native
+    # dominator
     # selectfuzz
 )
 
