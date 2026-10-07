@@ -26,7 +26,14 @@ CONFIG: Dict = {
         'focus_time': 300,
         'coverage_update_time': 30,
         'sync_time': 300,
+        'sync_top_k': 10,
         'timeout': '86400'
+    },
+    # Logging/statistics for prox-only vs dominator-aware comparison.
+    'analysis': {
+        # Monte Carlo samples used to estimate each fuzzer's Thompson
+        # selection probability at the focus decision.
+        'ts_probability_samples': 10000,
     },
     # unused now
     'docker': {
