@@ -11,12 +11,31 @@ import peewee
 from . import config as Config
 from .evaluateDB import AFLGoSeed, WindRangerSeed, DAFLSeed, init_db
 
+
 CONFIG = Config.CONFIG
 SCORE_CONFIG = CONFIG['score_DAFL']
 DAFL_CONFIG = CONFIG['fuzzer']['dafl']
 DOMINATOR_CONFIG = CONFIG['dominator']
 
 logger = logging.getLogger('dcfuzz.evaluate')
+
+# helper
+def seed_id_num(name: str) -> int:
+    """
+    Extract numeric part from AFL-style seed id.
+    Examples:
+    - id:000100 -> 100
+    - dafl_id:000100 -> 100
+    """
+    m = re.search(r"id:(\d+)", name)
+    if not m:
+        return -1
+    return int(m.group(1))
+
+
+def safe_int(v, default=-1):
+    return int(v) if v is not None else default
+
 
 
 # -----------------------------
@@ -155,25 +174,35 @@ def run_dominator_for_seed(seed_file: str, program: str):
     return dom_covered if dom_covered is not None else 0
 
 
-def evaluate_dom_covered_for_snapshot(snapshot_dir: str, program: str):
+def evaluate_dom_covered_for_snapshot(snapshot_dir: str, program: str, alias_to_real=None):
     """
     Evaluate each staged seed in snapshot_dir with Dominator binary.
-    Returns: { normalized_seed_id: dom_covered }
+    Returns: { real_seed_id: dom_covered }
     """
+    if alias_to_real is None:
+        alias_to_real = {}
+
     dom_result = {}
     src = Path(snapshot_dir)
 
-    for p in sorted(src.iterdir()):
+    for p in sorted(src.iterdir(), key=lambda x: x.name):
         if not p.is_file():
             continue
         if p.name.startswith('.') or p.name == 'README.txt':
             continue
         if '-sync' in p.name:
             continue
+        if p.name.endswith('.dom.log'):
+            continue
 
-        seed_id = normalize_afl_seed_id(p.name)
-        dom_result[seed_id] = run_dominator_for_seed(seed_file=str(p), program=program)
-        logger.info(f"evaluator 335 - seed_id={seed_id}, dom_covered={dom_result[seed_id]}")
+        alias_seed_id = normalize_afl_seed_id(p.name)
+        real_seed_id = alias_to_real.get(alias_seed_id, alias_seed_id)
+
+        dom_result[real_seed_id] = run_dominator_for_seed(seed_file=str(p), program=program)
+
+        logger.info(
+            f"evaluator 335 - alias_seed_id={alias_seed_id}, real_seed_id={real_seed_id}, dom_covered={dom_result[real_seed_id]}"
+        )
 
     return dom_result
 
@@ -229,44 +258,87 @@ def snapshot_dir_incremental(fuzzer: str, src_queue: str, dst_dir: str):
     dst.mkdir(parents=True, exist_ok=True)
 
     staged_names = []
+    alias_to_real = {}
 
-    for p in src.iterdir():
+    alias_idx = 0
+
+    for p in sorted(src.iterdir(), key=lambda x: x.name):
         if not p.is_file():
             continue
         if p.name.startswith(".") or p.name == "README.txt":
             continue
+        if p.name.endswith(".dom.log"):
+            continue
+
+        real_seed_id = normalize_afl_seed_id(p.name)
+
+        if SeedModel.select().where(SeedModel.name == real_seed_id).exists():
+            continue
+
+        # Sync seed는 원본 seed의 score/dom 정보를 상속하지 않는다.
+        # 이후 이 sync seed로부터 생성된 일반 child seed만 새로 평가/저장된다.
         if "-sync" in p.name:
+            logger.info(
+                f"evaluator 004s - skip sync seed without inheriting source score: {p.name}"
+            )
             continue
 
-        seed_id = normalize_afl_seed_id(p.name)
+        alias_seed_id = f"id:{alias_idx:06d}"
+        alias_idx += 1
 
-        if SeedModel.select().where(SeedModel.name == seed_id).exists():
-            continue
+        shutil.copy2(p, dst / alias_seed_id)
 
-        shutil.copy2(p, dst / p.name)
-        staged_names.append(seed_id)
+        staged_names.append(real_seed_id)
+        alias_to_real[alias_seed_id] = real_seed_id
 
-    logger.info(f"evaluator 004 - staged new seeds: {len(staged_names)}")
-    return staged_names
+        logger.info(
+            f"evaluator 004x - snapshot alias: "
+            f"{alias_seed_id} -> {real_seed_id}, src={p.name}"
+        )
 
+    logger.info(
+        f"evaluator 004 - staged new seeds: {len(staged_names)}"
+    )
+
+    return staged_names, alias_to_real
 
 def max_prox_from_db(fuzzer: str) -> dict:
     SeedModel = get_seed_model(fuzzer)
 
-    prox_row = (SeedModel
-                .select()
-                .where(SeedModel.prox_score.is_null(False))
-                .order_by(SeedModel.prox_score.desc(), SeedModel.name.asc())
-                .first())
+    prox_rows = list(
+        SeedModel
+        .select()
+        .where(SeedModel.prox_score.is_null(False))
+    )
 
-    dom_row = (SeedModel
-               .select()
-               .where(SeedModel.dom_covered.is_null(False))
-               .order_by(SeedModel.dom_covered.desc(), SeedModel.name.asc())
-               .first())
+    dom_rows = list(
+        SeedModel
+        .select()
+        .where(SeedModel.dom_covered.is_null(False))
+    )
 
-    max_prox_score = int(prox_row.prox_score) if prox_row else -1
-    max_dom_covered = int(dom_row.dom_covered) if dom_row else -1
+    prox_row = max(
+        prox_rows,
+        key=lambda r: (
+            safe_int(r.prox_score),
+            safe_int(r.dom_covered),
+            seed_id_num(r.name)
+        ),
+        default=None
+    )
+
+    dom_row = max(
+        dom_rows,
+        key=lambda r: (
+            safe_int(r.dom_covered),
+            safe_int(r.prox_score),
+            seed_id_num(r.name)
+        ),
+        default=None
+    )
+
+    max_prox_score = safe_int(prox_row.prox_score) if prox_row else -1
+    max_dom_covered = safe_int(dom_row.dom_covered) if dom_row else -1
 
     prox_seed_id = prox_row.name if prox_row else None
     dom_seed_id = dom_row.name if dom_row else None
@@ -307,7 +379,7 @@ def extract_score(fuzzer, seed, output_dir, program):
     cleanup_score_artifacts(score_file=score_path, snapshot_dir=snapshot_input, score_workdir=score_workdir)
     os.makedirs(score_workdir, exist_ok=True)
 
-    staged_names = snapshot_dir_incremental(
+    staged_names, alias_to_real = snapshot_dir_incremental(
         fuzzer=fuzzer,
         src_queue=seed_path,
         dst_dir=snapshot_input
@@ -315,7 +387,7 @@ def extract_score(fuzzer, seed, output_dir, program):
 
     if not staged_names:
         max_cached = max_prox_from_db(fuzzer)
-        logger.info(f"evaluator 010 - no new seeds for {fuzzer}. return max_cached={max_cached}")
+        logger.info(f"evaluator 010 - no new non-sync seeds for {fuzzer}. return max_cached={max_cached}")
         cleanup_score_artifacts(score_file=score_path, snapshot_dir=snapshot_input, score_workdir=score_workdir)
         return max_cached
 
@@ -344,13 +416,32 @@ def extract_score(fuzzer, seed, output_dir, program):
         cleanup_score_artifacts(score_file=score_path, snapshot_dir=snapshot_input, score_workdir=score_workdir)
         return max_cached
 
-    name_to_score = parse_score_file(score_path)
+    alias_to_score = parse_score_file(score_path)
+
+    name_to_score = {}
+    for alias_seed_id, score_tuple in alias_to_score.items():
+        real_seed_id = alias_to_real.get(alias_seed_id)
+
+        if real_seed_id is None:
+            logger.info(
+                f"evaluator 223 - score alias not found in alias_to_real: {alias_seed_id}, score={score_tuple}"
+            )
+            continue
+
+        name_to_score[real_seed_id] = score_tuple
+
+    logger.info(f"evaluator 224 - converted DAFL scores: {name_to_score}")
 
     # 2) get DOM_COVERED per seed by Dominator binary
-    name_to_dom_covered = evaluate_dom_covered_for_snapshot(snapshot_dir=snapshot_input, program=program)
+    name_to_dom_covered = evaluate_dom_covered_for_snapshot(
+        snapshot_dir=snapshot_input,
+        program=program,
+        alias_to_real=alias_to_real
+    )
 
     SeedModel = get_seed_model(fuzzer)
     with database.atomic():
+        # 1. 일반 new seed 저장
         for name in staged_names:
             prox, bmsz = name_to_score.get(name, (None, None))
             dom_covered = name_to_dom_covered.get(name)
@@ -362,7 +453,8 @@ def extract_score(fuzzer, seed, output_dir, program):
             row.save()
 
             logger.info(
-                f"evaluator 336 - save DB name={name}, prox={prox}, bitmap={bmsz}, dom_covered={dom_covered}"
+                f"evaluator 336 - save DB name={name}, "
+                f"prox={prox}, bitmap={bmsz}, dom_covered={dom_covered}"
             )
 
     cleanup_score_artifacts(score_file=score_path, snapshot_dir=snapshot_input, score_workdir=score_workdir)

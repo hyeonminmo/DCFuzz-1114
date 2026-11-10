@@ -36,10 +36,6 @@ inject_hit_by_name_line() {
   " "$file"
 }
 
-
-
-
-
 inject_from_line_file() {
   local line_file="$1"  
   echo "[inject] reading targets from: $line_file"

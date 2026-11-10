@@ -1,0 +1,50 @@
+ARG FUZZER_PREFIX
+
+FROM $FUZZER_PREFIX/dominator_new AS dominator_new_fuzzer
+FROM $FUZZER_PREFIX/aflgo
+
+COPY --from=dominator_new_fuzzer /fuzzer/Dominator /fuzzer/Dominator
+
+COPY --from=dominator_new_fuzzer /opt/SVF /opt/SVF
+COPY --from=dominator_new_fuzzer /usr/local/bin/wpa /usr/local/bin/wpa
+
+COPY --from=dominator_new_fuzzer /usr/lib/llvm-12 /usr/lib/llvm-12
+COPY --from=dominator_new_fuzzer /usr/bin/llvm-config-12 /usr/bin/llvm-config-12
+COPY --from=dominator_new_fuzzer /usr/bin/llvm-dis-12 /usr/bin/llvm-dis-12
+COPY --from=dominator_new_fuzzer /usr/bin/opt-12 /usr/bin/opt-12
+COPY --from=dominator_new_fuzzer /usr/bin/clang-12 /usr/bin/clang-12
+COPY --from=dominator_new_fuzzer /usr/bin/clang++-12 /usr/bin/clang++-12
+COPY --from=dominator_new_fuzzer /opt/llvm-project-15 /opt/llvm-project-15
+COPY --from=dominator_new_fuzzer /opt/DeepType /opt/DeepType
+
+ENV DEEPTYPE_HOME="/opt/DeepType"
+ENV LLVM15_HOME="/opt/llvm-project-15/build"
+
+ENV PATH="/usr/lib/llvm-12/bin:/opt/SVF/Release-build/bin:/usr/local/bin:${PATH}"
+
+# Install dependencies for building Binutils
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends texinfo 
+    
+COPY targetBuild/benchmark-project-build /benchmark/project
+COPY targetBuild/target/line /benchmark/target/line
+COPY targetBuild/build_bench_common.sh /benchmark/build_bench_common.sh
+COPY targetBuild/seed/cxxfilt /benchmark/seed/cxxfilt
+COPY targetBuild/triage /benchmark/triage
+
+WORKDIR /benchmark
+
+RUN echo "****************build dominator********************"
+
+COPY dominator_new/extract_dominator.sh /benchmark/extract_dominator.sh
+COPY dominator_new/script /benchmark/script
+COPY dominator_new/deeptype /benchmark/deeptype
+
+RUN mkdir -p /info/dominator_new
+RUN ./extract_dominator.sh
+
+
+# RUN rm /benchmark/extract_dominator.sh
+
+
+

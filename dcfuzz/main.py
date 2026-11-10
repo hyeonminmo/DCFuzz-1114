@@ -277,7 +277,7 @@ def cleanup(exit_code=0):
     os._exit(exit_code)
 
 def cleanup_exception(etype, value, tb):
-    #traceback.print_exception(etype, value, tb)
+    logger.critical("main 667 - uncaught exception", exc_info=(etype, value, tb))
     cleanup(1)
 
 def write_log():
@@ -479,139 +479,474 @@ class Schedule_Single(Schedule_Base):
 
 # multi fuzzer 실행하기
 class Schedule_DCFuzz(Schedule_Base):
+    """
+    DCFuzz scheduler with a shadow dominator-aware Thompson model.
+
+    The actual execution policy remains prox-only.  The shadow model receives
+    the same per-round measurements but is ranked by (dom_covered, prox_score).
+    This makes it possible to record the counterfactual rank and selection that
+    would have occurred if dominator coverage had been included.
+    """
+
     def __init__(self, fuzzers, dcFuzzers, prep_time=600, focus_time=600):
-        super().__init__(fuzzers=fuzzers, dcFuzzers=dcFuzzers, prep_time=prep_time, focus_time=focus_time)
-        self.name = f'RCFuzzer_{prep_time}_{focus_time}' 
-        self.round = 1      
+        super().__init__(
+            fuzzers=fuzzers,
+            dcFuzzers=dcFuzzers,
+            prep_time=prep_time,
+            focus_time=focus_time,
+        )
+        self.name = f'RCFuzzer_{prep_time}_{focus_time}'
+        self.round = 1
 
-        #self.find_new_round = False
-        #self.policy_bitmap = policy.BitmapPolicy()
-        #self.before_collection_fuzzer_info = empty_fuzzer_info(self.fuzzers)
-        #self.diff_threshold = diff_threshold
-        #self.focused_round = []
-        #self.picked_times = {}
-            
-    
+        # Actual policy: prox_score only.
+        self.dcFuzzers = dcFuzzers
+
+        # Counterfactual policy: dom_covered first, prox_score second.
+        # It must have an independent S/F history; sharing objects would make
+        # the two policies impossible to compare.
+        self.domFuzzers = {
+            name: thompson.fuzzer()
+            for name in fuzzers
+        }
+
+        analysis_config = config.get('analysis', {})
+        self.ts_probability_samples = int(
+            analysis_config.get('ts_probability_samples', 10000)
+        )
+        # Focus feedback weight: improvement => S +20, otherwise => F +20.
+        self.focus_outcome_delta = int(
+            analysis_config.get('focus_outcome_delta', 20)
+        )
+        self.current_round_record = None
+
+        global LOG
+        LOG.setdefault('dominator_analysis_summary', {
+            'evaluation_rounds': 0,
+            'ranking_changed_rounds': 0,
+            'top_rank_changed_rounds': 0,
+            'selection_rounds': 0,
+            'selection_changed_rounds': 0,
+            'rank_movement_by_fuzzer': {
+                name: {'improved': 0, 'worsened': 0, 'unchanged': 0}
+                for name in fuzzers
+            },
+            'actual_selection_count': {name: 0 for name in fuzzers},
+            'counterfactual_dom_selection_count': {name: 0 for name in fuzzers},
+        })
+
+    @staticmethod
+    def _compare_rank_reports(prox_report, dom_report):
+        prox_positions = prox_report['rank_positions']
+        dom_positions = dom_report['rank_positions']
+        names = sorted(set(prox_positions) | set(dom_positions))
+
+        position_changes = {
+            name: {
+                'prox_only_rank': prox_positions.get(name),
+                'dom_prox_rank': dom_positions.get(name),
+                # Negative means the fuzzer moved upward after applying dom.
+                'rank_delta_dom_minus_prox': (
+                    dom_positions.get(name) - prox_positions.get(name)
+                    if name in prox_positions and name in dom_positions
+                    else None
+                ),
+                'changed': prox_positions.get(name) != dom_positions.get(name),
+            }
+            for name in names
+        }
+
+        prox_top = set(prox_report['rank_groups'][0]) if prox_report['rank_groups'] else set()
+        dom_top = set(dom_report['rank_groups'][0]) if dom_report['rank_groups'] else set()
+
+        return {
+            'ranking_changed': any(v['changed'] for v in position_changes.values()),
+            'top_rank_changed': prox_top != dom_top,
+            'prox_only_top': sorted(prox_top),
+            'dom_prox_top': sorted(dom_top),
+            'position_changes': position_changes,
+        }
+
+    def _set_metrics_for_both_policies(self, perform, fuzzers):
+        metrics = {}
+        for name in fuzzers:
+            max_prox_score = max(entry['score'] for entry in perform[name])
+            max_dom_covered = max(entry['dom_covered'] for entry in perform[name])
+
+            for state in (self.dcFuzzers[name], self.domFuzzers[name]):
+                state.score = max_prox_score
+                state.dom = max_dom_covered
+
+            metrics[name] = {
+                'prox_score': int(max_prox_score),
+                'dom_covered': int(max_dom_covered),
+            }
+        return metrics
+
     def prep(self):
-        round_start_time = time.time()
-
         global OUTPUT, TARGET, START_TIME
-        logger.info(f'main 500 - start preparation phase')
+
+        logger.info('main 500 - start preparation phase')
         PRIORITY = ['dafl', 'windranger', 'aflgo']
-        
-        # set prep variable
+
         prep_fuzzers = sorted(
             self.fuzzers,
-            key=lambda f: PRIORITY.index(f) if f in PRIORITY else len(PRIORITY)
+            key=lambda f: PRIORITY.index(f) if f in PRIORITY else len(PRIORITY),
         )
-        # prep_fuzzers = self.fuzzers       
-        prep_time = self.prep_time
-        remain_time = prep_time
+        remain_time = self.prep_time
         prep_round = 1
         perform = defaultdict(list)
         prep_start_time = time.time()
 
-        #do_sync(self.fuzzers, OUTPUT)        
-        
-        while remain_time > 0 :
-            run_time = min(remain_time,30)
+        while remain_time > 0:
+            run_time = min(remain_time, 30)
 
             for prep_fuzzer in prep_fuzzers:
-                logger.info(f'main 502 - prep_fuzzer : {prep_fuzzer}, run time : {run_time}')
+                logger.info(
+                    'main 502 - prep_fuzzer : %s, run time : %s',
+                    prep_fuzzer,
+                    run_time,
+                )
 
                 self.run_one(prep_fuzzer)
                 sleep(run_time)
                 update_fuzzer_limit(prep_fuzzer, 0)
 
                 before_time = time.time()
-
                 evaluate_results = evaluate_score(prep_fuzzer)
                 perform[prep_fuzzer].append({
                     'prep_round': prep_round,
                     'score': evaluate_results['max_prox_score'],
-                    'dom_covered' : evaluate_results['max_dom_covered']
+                    'dom_covered': evaluate_results['max_dom_covered'],
                 })
+                evaluate_run_time = time.time() - before_time
 
-                after_time = time.time()
+                logger.info(
+                    'main 503 - round=%s prep_round=%s fuzzer=%s '
+                    'prox_score=%s dom_covered=%s evaluate_run_time=%s',
+                    self.round,
+                    prep_round,
+                    prep_fuzzer,
+                    evaluate_results['max_prox_score'],
+                    evaluate_results['max_dom_covered'],
+                    evaluate_run_time,
+                )
 
-                evaluate_run_time = after_time - before_time
+            metrics = self._set_metrics_for_both_policies(perform, prep_fuzzers)
 
-                logger.info(f'main 503 - prep round {prep_round} end - {prep_fuzzer} perform  : {perform[prep_fuzzer]}, evaluate_run_time: {evaluate_run_time}')
-            
+            # Actual prox-only ranking and shadow dominator-aware ranking are
+            # updated independently using the same measurements.
+            prox_report = thompson.rankFuzzer(
+                self.dcFuzzers,
+                use_dominator=False,
+                policy_name='prox_only_actual',
+                round_num=self.round,
+                prep_round=prep_round,
+            )
+            dom_report = thompson.rankFuzzer(
+                self.domFuzzers,
+                use_dominator=True,
+                policy_name='dom_prox_counterfactual',
+                round_num=self.round,
+                prep_round=prep_round,
+            )
+            dominator_effect = self._compare_rank_reports(prox_report, dom_report)
+
+            summary = LOG['dominator_analysis_summary']
+            summary['evaluation_rounds'] += 1
+            if dominator_effect['ranking_changed']:
+                summary['ranking_changed_rounds'] += 1
+            if dominator_effect['top_rank_changed']:
+                summary['top_rank_changed_rounds'] += 1
+            for name, change in dominator_effect['position_changes'].items():
+                delta = change['rank_delta_dom_minus_prox']
+                if delta is None or delta == 0:
+                    movement = 'unchanged'
+                elif delta < 0:
+                    movement = 'improved'
+                else:
+                    movement = 'worsened'
+                summary['rank_movement_by_fuzzer'][name][movement] += 1
+
+            evaluation_record = {
+                'event': 'evaluation_round',
+                'round': self.round,
+                'prep_round': prep_round,
+                'elapsed_since_start': time.time() - START_TIME,
+                'metrics': metrics,
+                'prox_only': prox_report,
+                'dom_prox': dom_report,
+                'dominator_effect': dominator_effect,
+            }
+            self.current_round_record['evaluation_rounds'].append(evaluation_record)
+
+            # Structured JSON line for direct post-processing from logDCFuzz.log.
+            logger.info(
+                'analysis 100 - %s',
+                json.dumps(evaluation_record, sort_keys=True),
+            )
+
+            for name in prep_fuzzers:
+                logger.info(
+                    'main 504 - round=%s prep_round=%s fuzzer=%s '
+                    'dom_covered=%s prox_score=%s '
+                    'prox_S=%s prox_F=%s dom_S=%s dom_F=%s',
+                    self.round,
+                    prep_round,
+                    name,
+                    metrics[name]['dom_covered'],
+                    metrics[name]['prox_score'],
+                    self.dcFuzzers[name].S,
+                    self.dcFuzzers[name].F,
+                    self.domFuzzers[name].S,
+                    self.domFuzzers[name].F,
+                )
+
             remain_time -= run_time
-            prep_round +=1
+            prep_round += 1
             do_sync(self.fuzzers, OUTPUT)
-        
+
         prep_end_time = time.time()
         prep_run_time = prep_end_time - prep_start_time
+        self.current_round_record['prep_start_time'] = prep_start_time
+        self.current_round_record['prep_end_time'] = prep_end_time
+        self.current_round_record['prep_run_time'] = prep_run_time
 
-        for fuzzer in prep_fuzzers:
-            self.dcFuzzers[fuzzer].score = max(entry['score'] for entry in perform[fuzzer])
-            self.dcFuzzers[fuzzer].dom = max(entry['dom_covered'] for entry in perform[fuzzer])
-            logger.info(f'main 504 - round {self.round} prep phase end - {fuzzer} max_score  : {self.dcFuzzers[fuzzer].score}, max_dom : {self.dcFuzzers[fuzzer].dom}')
+        logger.info(
+            'main 505 - round=%s prep_start_time=%s prep_end_time=%s prep_run_time=%s',
+            self.round,
+            prep_start_time,
+            prep_end_time,
+            prep_run_time,
+        )
 
-        logger.info(f'main 505 - prep round {self.round} end - prep_start_time: {prep_start_time}, prep_end_time:{prep_end_time}, prep_run_time : {prep_run_time}')
-                
-                
     def focus(self):
-        logger.info(f'main 506- start focus phase')
-        global OUTPUT
+        global OUTPUT, LOG
+
+        logger.info('main 506 - start focus phase')
         focus_start_time = time.time()
 
-        focus_time = self.focus_time
-        
-        thompson.rankFuzzer(self.dcFuzzers)
-        
-        for fuzzer in self.fuzzers:
-            logger.info(f'main 507 - {self.round} round {fuzzer} rank -  success :{self.dcFuzzers[fuzzer].S}, failure :{self.dcFuzzers[fuzzer].F}')
-        
-        selected_fuzzer = thompson.selectFuzzer(self.dcFuzzers)
-        
-        logger.info(f'main 508 -  selected_fuzzer : {selected_fuzzer}')
+        for name in self.fuzzers:
+            logger.info(
+                'main 507 - round=%s fuzzer=%s prox_S=%s prox_F=%s '
+                'dom_S=%s dom_F=%s',
+                self.round,
+                name,
+                self.dcFuzzers[name].S,
+                self.dcFuzzers[name].F,
+                self.domFuzzers[name].S,
+                self.domFuzzers[name].F,
+            )
+
+        # The same random seed is used for both policy states. Therefore, if
+        # their S/F values are equal, their beta samples and selection are equal.
+        # A difference is caused by the policy-dependent rank updates rather
+        # than by unrelated random draws.
+        selection_seed = random.getrandbits(63)
+        selected_fuzzer, prox_selection = thompson.selectFuzzer(
+            self.dcFuzzers,
+            seed=selection_seed,
+            probability_samples=self.ts_probability_samples,
+            policy_name='prox_only_actual',
+            round_num=self.round,
+            return_details=True,
+        )
+        dom_selected_fuzzer, dom_selection = thompson.selectFuzzer(
+            self.domFuzzers,
+            seed=selection_seed,
+            probability_samples=self.ts_probability_samples,
+            policy_name='dom_prox_counterfactual',
+            round_num=self.round,
+            return_details=True,
+        )
+
+        selection_changed = selected_fuzzer != dom_selected_fuzzer
+
+        summary = LOG['dominator_analysis_summary']
+        summary['selection_rounds'] += 1
+        if selection_changed:
+            summary['selection_changed_rounds'] += 1
+        summary['actual_selection_count'][selected_fuzzer] += 1
+        summary['counterfactual_dom_selection_count'][dom_selected_fuzzer] += 1
+
+        focus_record = {
+            'event': 'focus_selection',
+            'round': self.round,
+            'actual_policy': 'prox_only',
+            'selection_seed': selection_seed,
+            'prox_only': prox_selection,
+            'dom_prox': dom_selection,
+            'final_selected_fuzzer': selected_fuzzer,
+            'counterfactual_dom_selected_fuzzer': dom_selected_fuzzer,
+            'dominator_changed_selection': selection_changed,
+        }
+        self.current_round_record['focus_selection'] = focus_record
+
+        logger.info('analysis 200 - %s', json.dumps(focus_record, sort_keys=True))
+        logger.info(
+            'main 508 - round=%s final_selected_fuzzer=%s '
+            'counterfactual_dom_selected_fuzzer=%s '
+            'dominator_changed_selection=%s',
+            self.round,
+            selected_fuzzer,
+            dom_selected_fuzzer,
+            selection_changed,
+        )
+
+        # Compare the new focus result against this fuzzer's last observed
+        # metrics.  After the initial prep phase these values come from prep;
+        # after that they come from the fuzzer's most recent focus evaluation.
+        previous_prox_score = int(self.dcFuzzers[selected_fuzzer].score)
+        previous_dom_covered = int(self.dcFuzzers[selected_fuzzer].dom)
+        focus_record['previous_selected_fuzzer_metrics'] = {
+            'fuzzer': selected_fuzzer,
+            'prox_score': previous_prox_score,
+            'dom_covered': previous_dom_covered,
+        }
+
+        # Only the prox-only result controls the real focus execution.
         self.run_one(selected_fuzzer)
-        sleep(focus_time)
+        sleep(self.focus_time)
         update_fuzzer_limit(selected_fuzzer, 0)
-        
-        # while focus_time > 0: 
-        #     run_time = focus_time
-        #     run_time = min(focus_time,150)
-        #     self.run_one(selected_fuzzer)
-        #     sleep(run_time)
-        #     focus_time -= run_time
 
         evaluate_start_time = time.time()
         evaluate_results = evaluate_score(selected_fuzzer)
-        evaluate_end_time = time.time()
+        evaluate_run_time = time.time() - evaluate_start_time
 
-        evaluate_run_time = evaluate_end_time - evaluate_start_time
-        logger.info(f'main 509 - round {self.round} focus phase end - {selected_fuzzer} max score  : {evaluate_results}')
-        logger.info(f'main 666 - round {self.round} focus phase evaluate - evaluate_run_time : {evaluate_run_time}')
+        new_prox_score = int(evaluate_results['max_prox_score'])
+        new_dom_covered = int(evaluate_results['max_dom_covered'])
+        dom_improved = new_dom_covered > previous_dom_covered
+        prox_improved = new_prox_score > previous_prox_score
+        focus_success = dom_improved or prox_improved
+
+        # Do not reset S/F between focus rounds.  Instead, reward the actually
+        # selected fuzzer when either metric improves; otherwise penalize it.
+        # Apply the same observed outcome to the shadow state so both policies
+        # consume the same real execution evidence.
+        prox_feedback = thompson.updateFuzzerCount(
+            self.dcFuzzers,
+            selected_fuzzer,
+            1 if focus_success else 0,
+            delta=self.focus_outcome_delta,
+        )
+        dom_feedback = thompson.updateFuzzerCount(
+            self.domFuzzers,
+            selected_fuzzer,
+            1 if focus_success else 0,
+            delta=self.focus_outcome_delta,
+        )
+
+        # This becomes the comparison baseline the next time this fuzzer is
+        # selected.  Other fuzzers retain their own last observed metrics.
+        for state in (self.dcFuzzers[selected_fuzzer], self.domFuzzers[selected_fuzzer]):
+            state.score = new_prox_score
+            state.dom = new_dom_covered
+
+        focus_record['actual_focus_evaluation'] = {
+            'fuzzer': selected_fuzzer,
+            'previous_prox_score': previous_prox_score,
+            'previous_dom_covered': previous_dom_covered,
+            'max_prox_score': new_prox_score,
+            'max_dom_covered': new_dom_covered,
+            'prox_improved': prox_improved,
+            'dom_improved': dom_improved,
+            'focus_success': focus_success,
+            'feedback_delta': self.focus_outcome_delta,
+            'prox_policy_feedback': prox_feedback,
+            'dom_policy_feedback': dom_feedback,
+            'evaluate_run_time': evaluate_run_time,
+        }
+
+        logger.info(
+            'main 509 - round=%s focus_fuzzer=%s max_prox_score=%s '
+            'max_dom_covered=%s evaluate_run_time=%s '
+            'prev_prox_score=%s prev_dom_covered=%s '
+            'prox_improved=%s dom_improved=%s focus_success=%s '
+            'dS=%s dF=%s S_after=%s F_after=%s',
+            self.round,
+            selected_fuzzer,
+            new_prox_score,
+            new_dom_covered,
+            evaluate_run_time,
+            previous_prox_score,
+            previous_dom_covered,
+            prox_improved,
+            dom_improved,
+            focus_success,
+            prox_feedback['dS'],
+            prox_feedback['dF'],
+            prox_feedback['S_after'],
+            prox_feedback['F_after'],
+        )
+        logger.info(
+            'analysis 201 - %s',
+            json.dumps(focus_record['actual_focus_evaluation'], sort_keys=True),
+        )
 
         do_sync(self.fuzzers, OUTPUT)
-        
+
         focus_end_time = time.time()
         focus_run_time = focus_end_time - focus_start_time
-        
-        for fuzzer in self.fuzzers:
-            self.dcFuzzers[fuzzer] = thompson.fuzzer()
+        self.current_round_record['focus_start_time'] = focus_start_time
+        self.current_round_record['focus_end_time'] = focus_end_time
+        self.current_round_record['focus_run_time'] = focus_run_time
+        self.current_round_record['end_time'] = focus_end_time
+        self.current_round_record['cumulative_dominator_analysis_summary'] = json.loads(
+            json.dumps(LOG['dominator_analysis_summary'])
+        )
 
-        logger.info(f'main 510 - focus round {self.round} end - focus_start_time: {focus_start_time}, focus_end_time:{focus_end_time}, focus_run_time : {focus_run_time}')
-        
+        # Store the complete structured record in the existing JSON result file.
+        LOG['round'].append(self.current_round_record)
+        logger.info(
+            'analysis 299 - %s',
+            json.dumps(self.current_round_record, sort_keys=True),
+        )
+
+        # S/F and the last observed dom/prox metrics intentionally persist
+        # across focus rounds.  They are updated by the focus outcome above.
+
+        logger.info(
+            'main 510 - round=%s focus_start_time=%s focus_end_time=%s focus_run_time=%s',
+            self.round,
+            focus_start_time,
+            focus_end_time,
+            focus_run_time,
+        )
+
     def main(self):
-        # if is_end():return
-        # logger.info(f'main 801 - dcfuzz start')
-        # self.focus()
-        # logger.info(f'main 802 - dcfuzz end')
+        # Preparation is performed exactly once at the beginning.  Every
+        # remaining scheduler round is focus-only until the global timeout.
+        prep_completed = True
+
         while True:
-            if is_end():return
-            #if not self.pre_round():continue
-            logger.info(f'main 801 - dcfuzz phase round {self.round} start')
-            self.prep()
+            if is_end():
+                return
+
+            logger.info('main 801 - dcfuzz phase round %s start', self.round)
+            self.current_round_record = {
+                'round': self.round,
+                'actual_policy': 'prox_only',
+                'comparison_policy': 'dom_covered_then_prox_score',
+                'start_time': time.time(),
+                'evaluation_rounds': [],
+                'prep_executed': not prep_completed,
+            }
+
+            if not prep_completed:
+                self.prep()
+                prep_completed = True
+            else:
+                logger.info(
+                    'main 802 - round=%s skip preparation phase; focus-only round',
+                    self.round,
+                )
+
+            if is_end():
+                return
+
             self.focus()
-            logger.info(f'main 803 - dcfuzz phase round {self.round} end')
-            self.round+=1
-            #self.post_round()
-        
+            logger.info('main 803 - dcfuzz phase round %s end', self.round)
+            self.round += 1
+
     def pre_run(self) -> bool:
         logger.info(f"main 810 - {self.name}: pre_run")
         return True
@@ -628,7 +963,7 @@ class Schedule_DCFuzz(Schedule_Base):
 def main():
     global ARGS, TARGET, FUZZERS, OUTPUT, INPUT, TIMEOUT, PREP_TIME, FOCUS_TIME
     global START_TIME, LOG_DATETIME, LOG_FILE_NAME
-    global CPU_ASSIGN
+    global CPU_ASSIGN, RUNNING
 
     ARGS = cli.ArgsParser().parse_args()
 

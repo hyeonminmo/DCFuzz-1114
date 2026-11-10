@@ -4,15 +4,18 @@ FROM fuzzer_base3/aflgo_dup_test AS aflgo
 FROM fuzzer_base3/windranger_dup_test AS windranger
 #FROM fuzzer_base3/dafl2 AS dafl
 FROM fuzzer_base3/dafl_dup_test AS dafl
-FROM fuzzer_base3/dominator AS dominator
+# FROM fuzzer_base3/selectfuzz_prob AS selectfuzz_prob
 FROM fuzzer_base3/score AS score
+FROM fuzzer_base3/dominator AS dominator
+
 
 FROM dcfuzz_bench/aflgo AS bench_aflgo
 FROM dcfuzz_bench2/windranger AS bench_windranger
 FROM dcfuzz_bench2/dafl AS bench_dafl
-FROM dcfuzz_bench/dominator AS bench_dominator
+# FROM dcfuzz_bench3/selectfuzz AS bench_selectfuzz
 FROM dcfuzz_bench/asan AS bench_asan
 FROM dcfuzz_bench/native AS bench_native
+FROM dcfuzz_bench/dominator AS bench_dominator
 
 
 #FROM dcfuzz_bench/patch AS bench_patch
@@ -68,7 +71,6 @@ COPY --chown=$UID:$GID --from=aflgo /fuzzer /fuzzer
 COPY --chown=$UID:$GID --from=windranger /fuzzer /fuzzer
 COPY --chown=$UID:$GID --from=dafl /fuzzer /fuzzer
 COPY --chown=$UID:$GID --from=score /fuzzer /fuzzer
-COPY --chown=$UID:$GID --from=dominator /fuzzer /fuzzer
 
 
 ## Copy program with each fuzzer image 
@@ -112,7 +114,9 @@ RUN wget https://www.python.org/ftp/python/3.9.4/Python-3.9.4.tgz \
     && ./configure \
     && make -j8 install
 
-RUN curl https://bootstrap.pypa.io/get-pip.py -o /get-pip.py && python3 /get-pip.py
+RUN curl -fsSL https://bootstrap.pypa.io/pip/3.9/get-pip.py -o /get-pip.py \
+    && python3 /get-pip.py \
+    && rm -f /get-pip.py
 RUN rm /Python-3.9.4.tgz
 
 # set timezone
@@ -123,6 +127,10 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN apt-get install -y zsh locales direnv highlight jq
 RUN locale-gen en_US.UTF-8
 
+# PyTorch for PPO
+RUN python3 -m pip install --no-cache-dir \
+    torch==2.3.1 \
+    --index-url https://download.pytorch.org/whl/cpu
 
 COPY init.sh /
 COPY dcfuzz/ /dcfuzz/dcfuzz
@@ -140,3 +148,6 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 USER $USER
 
 WORKDIR /home/$USER
+
+
+

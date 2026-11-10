@@ -1,6 +1,10 @@
 ARG FUZZER_PREFIX
 FROM $FUZZER_PREFIX/aflgo
 
+# Install dependencies for building Binutils
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends texinfo 
+
 COPY targetBuild/benchmark-project /benchmark/project
 COPY targetBuild/target/line /benchmark/target/line
 COPY targetBuild/build_bench_common.sh /benchmark/build_bench_common.sh
