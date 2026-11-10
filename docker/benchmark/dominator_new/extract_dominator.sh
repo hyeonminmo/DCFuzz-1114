@@ -15,6 +15,12 @@ function find_precodegen_bc() {
     local project="$1"
     local bin_name="$2"
     local rundir="/benchmark/RUNDIR-$project"
+    
+    if [ "$project" = "lrzip-9de7ccb" ] || [ "$project" = "lrzip-ed51e14" ]; then
+        find "$rundir" -type f -name "lrzip.*.precodegen.bc" \
+            -not -path "*/.libs/*" | head -n 1
+        return 0
+    fi
 
     if find "$rundir" -name "*${bin_name}*precodegen.bc" | grep -q .; then
         find "$rundir" -name "*${bin_name}*precodegen.bc" | head -n 1
@@ -127,6 +133,7 @@ PY_DUMP
 # All LLVM-bitcode inputs that participated in LTO are replaced by the single
 # instrumented whole-program object. Native objects/libraries and ordinary
 # linker flags are preserved.
+
 function relink_from_capture() {
     local capture="$1"
     local dom_obj="$2"
@@ -162,6 +169,11 @@ cwd_path = Path(cwd)
 
 if not cwd_path.is_dir():
     raise SystemExit(f"[dominator-relink] captured cwd does not exist: {cwd}")
+
+is_libjpeg = any(
+    part.startswith("RUNDIR-libjpeg-")
+    for part in cwd_path.parts
+)
 
 
 def resolve_file(arg: str) -> Path:
@@ -206,8 +218,6 @@ def archive_has_bitcode(path: Path) -> bool:
     if not members:
         return False
 
-    # A uniform LTO build normally yields all-bitcode local archives. Seeing
-    # any bitcode member is enough to classify the archive as an LTO input.
     for member in members:
         try:
             p = subprocess.run(
@@ -242,7 +252,8 @@ def is_lto_input_arg(arg: str) -> bool:
 
 def is_lto_only_flag(arg: str) -> bool:
     if arg == '-flto' or arg.startswith('-flto='):
-        return True
+        return not is_libjpeg
+
     if arg == '-fno-fat-lto-objects':
         return True
     if arg.startswith('-Wl,-plugin-opt') or arg.startswith('-Wl,--plugin-opt'):
@@ -251,9 +262,11 @@ def is_lto_only_flag(arg: str) -> bool:
         return True
     return False
 
+
 new_args: list[str] = []
 removed_inputs: list[str] = []
 removed_flags: list[str] = []
+preserved_archives: list[str] = []
 inserted = False
 
 i = 0
@@ -267,6 +280,16 @@ while i < len(args):
 
     if is_lto_only_flag(arg):
         removed_flags.append(arg)
+        i += 1
+        continue
+
+    if (
+        is_libjpeg
+        and Path(arg).name == "libjpeg.a"
+        and is_lto_input_arg(arg)
+    ):
+        preserved_archives.append(arg)
+        new_args.append(arg)
         i += 1
         continue
 
@@ -288,21 +311,32 @@ if not inserted:
     )
 
 print(f"[dominator-relink] cwd={cwd}")
+print(f"[dominator-relink] libjpeg special handling: {is_libjpeg}")
+
 print("[dominator-relink] removed LTO inputs:")
 for x in removed_inputs:
     print(f"  - {x}")
+
+if preserved_archives:
+    print("[dominator-relink] preserved archives:")
+    for x in preserved_archives:
+        print(f"  - {x}")
+
 if removed_flags:
     print("[dominator-relink] removed LTO-only flags:")
     for x in removed_flags:
         print(f"  - {x}")
+
 print("[dominator-relink] replay command:")
-print("  " + " ".join(shlex.quote(x) for x in [real, *new_args]))
+print("  " + " ".join(shlex.quote(x) for x in [real, *new_args]),
+      flush=True)
 
 r = subprocess.run([real, *new_args], cwd=cwd, check=False)
 if r.returncode != 0:
     raise SystemExit(r.returncode)
 PY_RELINK
 }
+
 
 # arg1 : Target project
 # arg2~: Fuzzing targets
@@ -374,9 +408,22 @@ function build_with_Dominator() {
                 libming*)
                     LINK_BIN_NAME="$BIN_NAME"
                     ;;
+                libxml*)
+                    LINK_BIN_NAME="$BIN_NAME"
+                    ;;
+                lrzip*)
+                    LINK_BIN_NAME="$BIN_NAME"
+                    ;;
+                libjpeg*)
+                    if [ "$BIN_NAME" = "cjpeg" ]; then
+                        LINK_BIN_NAME="cjpeg-static"
+                    fi
+                    ;;
                 binutils*)
                     if [ "$BIN_NAME" = "nm" ]; then
                         LINK_BIN_NAME="nm-new"
+                    elif [ "$BIN_NAME" = "strip" ]; then
+                        LINK_BIN_NAME="strip-new"
                     else
                         LINK_BIN_NAME="$BIN_NAME"
                     fi
@@ -392,6 +439,10 @@ function build_with_Dominator() {
 
             ADDITIONAL_SVF="-g -flto -fuse-ld=gold \
                             -Wl,-plugin-opt=save-temps"
+            
+            if [[ "$1" == "lrzip-9de7ccb" || "$1" == "lrzip-ed51e14" ]]; then
+                ln -sfn /usr/lib/llvm-12/lib/LLVMgold.so /usr/lib/LLVMgold.so
+            fi
 
             build_target "$1" "$CC_SVF" "$CXX_SVF" "$ADDITIONAL_SVF"
 
@@ -573,7 +624,8 @@ function build_with_Dominator() {
 
             : > "$TMP_DIR/dominator_nodes.txt"
             : > "$TMP_DIR/extract_dominator.log"
-
+            
+            local FTARGETS="$(sort -u "$TMP_DIR/Ftargets.txt" | head -n 1)"
             local TARGET_LINE
             TARGET_LINE="$(grep -v '^[[:space:]]*$' "$TMP_DIR/BBtargets.txt" \
                 | grep -v '^[[:space:]]*#' \
@@ -590,11 +642,13 @@ function build_with_Dominator() {
             echo "[dominator-build] extract dominators for target=$TARGET_LINE" >&2
             echo "[dominator-build] ICFG dir=$SMLTA_ICFG_DIR" >&2
             echo "[dominator-build] module.ll=$TMP_DIR/module.ll" >&2
+            echo "[dominator-build] FTARGETS=$FTARGETS" >&2
 
             python3 "$DOM_SCRIPT_DIR/extract_dominator.py" \
                 --icfg-dir "$SMLTA_ICFG_DIR" \
                 --module-ll "$TMP_DIR/module.ll" \
                 --target "$TARGET_LINE" \
+                --function "$FTARGETS" \
                 > "$TMP_DIR/dominator_nodes.txt" \
                 2> "$TMP_DIR/extract_dominator.log" || {
                     rc=$?
@@ -781,6 +835,15 @@ function build_with_Dominator() {
                 binutils*)
                     RELINK_BIN="/benchmark/RUNDIR-$1/$1/binutils/$LINK_BIN_NAME"
                     ;;
+                libjpeg*)
+                    RELINK_BIN="/benchmark/RUNDIR-$1/libjpeg-turbo-${1#libjpeg-}/$LINK_BIN_NAME"
+                    ;;
+                libxml*)
+                    RELINK_BIN="/benchmark/RUNDIR-$1/$1/$LINK_BIN_NAME"
+                    ;;
+                lrzip*)
+                    RELINK_BIN="/benchmark/RUNDIR-$1/BUILD/$LINK_BIN_NAME"
+                    ;;
                 *)
                     echo "[dominator-build] ERROR: unsupported project for relink binary: $1" >&2
                     exit 1
@@ -812,17 +875,17 @@ function build_with_Dominator() {
             ###################################################################
             copy_build_result "$1" "$BIN_NAME" "$BUG_NAME" "Dominator"
 
-            ###################################################################
+            ##################################################################
             # 16. 분석/계측 결과 저장
-            ###################################################################
+            ##################################################################
             local INFO_RUN="/info/dominator_new/run_${BIN_NAME}-${BUG_NAME}"
             local INFO_TMP="/info/dominator_new/temp_${BIN_NAME}-${BUG_NAME}"
 
             cp -r "/benchmark/RUNDIR-$1" "$INFO_RUN"
             cp -r "$TMP_DIR" "$INFO_TMP"
 
-            rm -rf "$TMP_DIR"
-            rm -rf "/benchmark/RUNDIR-$1"
+            # rm -rf "$TMP_DIR"
+            # rm -rf "/benchmark/RUNDIR-$1"
         done
     done
 }
@@ -857,8 +920,10 @@ done
 mkdir -p /benchmark/bin/Dominator
 mkdir -p /info/dominator_new
 
-# build_with_Dominator "libming-4.7" \
-#     "objdump 2017-8392 2017-8396 2017-8397 2017-8398"
+build_with_Dominator "libxml2-2.9.4" \
+    "xmllint 2017-9047" 
+
+
 
 # build_with_Dominator "libming-4.7" \
 #     "swftophp 2016-9827 2016-9829 2016-9831 2017-9988 2017-11728 2017-11729"
@@ -868,10 +933,36 @@ mkdir -p /info/dominator_new
 #     "swftophp 2019-9114"
 # build_with_Dominator "binutils-2.26" \
 #     "cxxfilt 2016-4489 2016-4490 2016-4491 2016-4492 2016-6131"
-build_with_Dominator "binutils-2.28" \
-   "objdump 2017-8392 2017-8396" #2017-8397 2017-8398"
+# build_with_Dominator "binutils-2.28" \
+#    "objdump 2017-8392 2017-8396 2017-8397 2017-8398"
 # build_with_Dominator "binutils-2.29" \
 #     "nm 2017-14940"
 
+# wait
 
-wait
+# ## remain
+# build_with_Dominator "binutils-2.26" \
+#     "cxxfilt 2016-4487" 
+# build_with_Dominator "binutils-2.28" \
+#     "objcopy 2017-8393 2017-8394 2017-8395"
+# build_with_Dominator "binutils-2.29" \
+#     "readelf 2017-16828"
+# build_with_Dominator "binutils-2.31.1" \
+#     "objdump 2018-17360"
+# build_with_Dominator "binutils-2.27" \
+#     "strip 2017-7303"
+
+# build_with_Dominator "libxml2-2.9.4" \
+#     "xmllint 2017-5969 2017-9047 2017-9048"
+# build_with_Dominator "libming-4.7.1" \
+#     "swftophp 2017-7578"
+# build_with_Dominator "libming-4.8" \
+#     "swftophp 2018-11095" 
+# build_with_Dominator "libjpeg-1.5.90" \
+#     "cjpeg 2018-14498"
+# build_with_Dominator "libjpeg-2.0.4" \
+#     "cjpeg 2020-13790"
+# build_with_Dominator "lrzip-9de7ccb" \
+#     "lrzip 2017-8846"
+# build_with_Dominator "lrzip-ed51e14" \
+#     "lrzip 2018-11496"

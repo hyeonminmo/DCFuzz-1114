@@ -1,5 +1,5 @@
 #!/bin/bash
-URL="http://ftp.gnu.org/gnu/binutils/binutils-2.26.tar.gz"
+URL="https://gcc.gnu.org/ftp/binutils/releases/binutils-2.26.tar.gz"
 DIRNAME="binutils-2.26"
 ARCHIVE=$DIRNAME".tar.gz"
 CONFIG_OPTIONS="--disable-shared --disable-gdb \
@@ -53,9 +53,7 @@ inject_from_line_file() {
 
 
 echo "*********************binutils-2.26*************************"
-wget $URL -O $ARCHIVE
-rm -rf $DIRNAME
-tar -xzf $ARCHIVE || exit 1
+cp -a /benchmark/project/binutils-2.26/binutils-2.26 ./
 cd $DIRNAME
 
 echo "BIN_NAME : $1, BUG_NAME : $2"

@@ -899,8 +899,8 @@ def compute_interprocedural_dominators(
             affected: Set[str] = set()
             affected.update(e.dst for e in g.out_edges.get(v, []))
             affected.update(c.descendants([v]))
-            for r in removed:
-                affected.update(c.descendants([r]))
+            if removed:
+                affected.update(c.descendants(removed))
             for a in affected:
                 if a in g.nodes and a not in in_work:
                     work.append(a)
@@ -1265,8 +1265,36 @@ def main(argv: Sequence[str]) -> int:
     bb_source_lines = collect_all_bb_source_lines(module_lines, module_md_nodes)
     bb_rep_lines = representative_lines_from_sets(bb_source_lines)
     bb_fingerprints = collect_all_bb_fingerprints(module_lines)
+    
+    reachable = set(roots)
+    queue = deque(roots)
 
-    dom_nodes = dominator_ancestors_for_targets(c, target_nodes)
+    while queue:
+        current = queue.popleft()
+
+        for edge in g.out_edges.get(current, []):
+            next_node = edge.dst
+
+            if next_node not in reachable:
+                reachable.add(next_node)
+                queue.append(next_node)
+
+    reachable_targets = [
+        nid for nid in target_nodes
+        if nid in reachable
+    ]
+
+    if not reachable_targets:
+        print("[ERROR] No reachable target nodes", file=sys.stderr)
+        return 1
+
+    print(
+        f"[DEBUG] target nodes: {len(target_nodes)} "
+        f"-> reachable targets: {len(reachable_targets)}",
+        file=sys.stderr
+    )
+
+    dom_nodes = dominator_ancestors_for_targets(c, reachable_targets)
     rows = format_program_dominators(
         g,
         dom_nodes,

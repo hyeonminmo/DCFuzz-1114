@@ -22,6 +22,10 @@ ENV LLVM15_HOME="/opt/llvm-project-15/build"
 
 ENV PATH="/usr/lib/llvm-12/bin:/opt/SVF/Release-build/bin:/usr/local/bin:${PATH}"
 
+# Install dependencies for building Binutils
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends texinfo 
+    
 COPY targetBuild/benchmark-project-build /benchmark/project
 COPY targetBuild/target/line /benchmark/target/line
 COPY targetBuild/build_bench_common.sh /benchmark/build_bench_common.sh
@@ -39,14 +43,8 @@ COPY dominator_new/deeptype /benchmark/deeptype
 RUN mkdir -p /info/dominator_new
 RUN ./extract_dominator.sh
 
-# COPY dominator/extract_valid_path.sh /benchmark/extract_valid_path.sh
-# RUN ./extract_valid_path.sh
 
-# COPY dominator_new/build_bench_dominator.sh /benchmark/build_bench_dominator.sh
-# RUN ./build_bench_dominator.sh
-
-# RUN rm /benchmark/build_bench_dominator.sh
 # RUN rm /benchmark/extract_dominator.sh
-# RUN rm /benchmark/extract_valid_path.sh
+
 
 

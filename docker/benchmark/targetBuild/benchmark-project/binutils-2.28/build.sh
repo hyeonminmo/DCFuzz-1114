@@ -1,5 +1,5 @@
 #!/bin/bash
-URL="http://ftp.gnu.org/gnu/binutils/binutils-2.28.tar.gz"
+URL="https://gcc.gnu.org/ftp/binutils/releases/binutils-2.28.tar.gz"
 DIRNAME="binutils-2.28"
 ARCHIVE=$DIRNAME".tar.gz"
 CONFIG_OPTIONS="--disable-shared --disable-gdb \
